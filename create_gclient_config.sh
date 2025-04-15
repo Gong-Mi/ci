@@ -29,4 +29,7 @@ echo "$GCLIENT_CONFIG" > .gclient
 # 创建 DEPS 文件
 echo "$DEPS_CONFIG" > DEPS
 
+
+
+
 echo ".gclient and DEPS files created."
