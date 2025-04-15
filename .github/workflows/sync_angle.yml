@@ -11,7 +11,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          repository: Gong-Mi/ci  #  检出 workflow 配置文件
+          repository: Gong-Mi/ci  #  检出 workflow 配置文件 (包含 install-build-deps.py)
 
       - name: Install depot_tools and Cache
         id: cache-depot-tools
@@ -34,32 +34,32 @@ jobs:
           ls -al depot_tools/bootstrap_python3
           echo "depot_tools installation verified."
 
+      - name: Install Build Dependencies  #  直接运行本地脚本，提前执行
+        run: |
+          export PATH="$PATH:$(pwd)/depot_tools"  #  depot_tools 和 install-build-deps.py 在同一仓库中
+          python install-build-deps.py
+
       - name: Create ANGLE directory
         run: mkdir -p angle
 
       - name: Configure gclient
         working-directory: angle
         run: |
-          export PATH="$PATH:$(pwd)/../depot_tools"
+          export PATH="$PATH:$(pwd)/../depot_tools" #  angle 目录在 workflow 根目录下， depot_tools 在 workflow 根目录下
           gclient config https://chromium.googlesource.com/angle/angle.git
 
-      - name: Install Build Dependencies
-        working-directory: angle
-        run: |
-          export PATH="$PATH:$(pwd)/../depot_tools"
-          python build/install-build-deps.py
-
-      - name: Cache Install Build Dependencies  # 移动到 Install Build Dependencies 之后
+      - name: Cache Install Build Dependencies #  缓存安装依赖后的状态，在 install-build-deps 之后
         id: cache-install-build-deps
         uses: actions/cache@v4
         with:
-          path: angle  #  缓存 angle 目录，包含已安装的依赖
-          key: install-build-deps-${{ runner.os }}-${{ hashFiles('angle/build/install-build-deps.py') }}
+          path: angle  #  缓存 angle 目录，包含 install-build-deps.py 安装的依赖
+          key: install-build-deps-${{ runner.os }}-${{ hashFiles('install-build-deps.py') }} #  重要: 缓存 Key 依赖于 install-build-deps.py 脚本自身
           restore-keys: |
             install-build-deps-${{ runner.os }}-
 
       
-      - name: Cache ANGLE Source Code (gclient sync)  # 移动到 gclient sync 之后
+
+      - name: Cache ANGLE Source Code (gclient sync) # 缓存同步后的源码，在 gclient sync 之后
         id: cache-angle-source
         uses: actions/cache@v4
         with:
