@@ -43,20 +43,27 @@ jobs:
           export PATH="$PATH:$(pwd)/../depot_tools"
           gclient config https://chromium.googlesource.com/angle/angle.git
 
-      - name: Cache Install Build Dependencies
+      - name: Install Build Dependencies
+        working-directory: angle
+        run: |
+          export PATH="$PATH:$(pwd)/../depot_tools"
+          python build/install-build-deps.py
+
+      - name: Cache Install Build Dependencies  # 移动到 Install Build Dependencies 之后
         id: cache-install-build-deps
         uses: actions/cache@v4
         with:
-          path: angle
+          path: angle  #  缓存 angle 目录，包含已安装的依赖
           key: install-build-deps-${{ runner.os }}-${{ hashFiles('angle/build/install-build-deps.py') }}
           restore-keys: |
             install-build-deps-${{ runner.os }}-
 
-      - name: Cache ANGLE Source Code (gclient sync)
+      
+      - name: Cache ANGLE Source Code (gclient sync)  # 移动到 gclient sync 之后
         id: cache-angle-source
         uses: actions/cache@v4
         with:
-          path: angle
+          path: angle  # 缓存 angle 目录，包含同步后的源码和依赖
           key: angle-source-${{ runner.os }}-${{ hashFiles('angle/.gclient', 'angle/DEPS') }}
           restore-keys: |
             angle-source-${{ runner.os }}-
