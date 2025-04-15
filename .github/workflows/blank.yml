@@ -19,7 +19,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # 确保没有额外的配置，例如 sparse checkout
+
+      - name: Verify Checkout
+        run: |
+          pwd
+          ls -al angle
+          ls -al angle/third_party # 确认 angle/third_party 目录存在
 
       #  调整 depot_tools 缓存的路径
       - name: Install depot_tools and Cache
