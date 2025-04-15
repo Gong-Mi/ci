@@ -135,20 +135,7 @@ jobs:
             android-sdk-ndk-${{ runner.os }}-
       #  --------------------------
 
-      - name: Install vpython deps
-        working-directory: angle # 修改
-        if: steps.cache-android-sdk-ndk.outputs.cache-hit != 'true'
-        run: |
-          # Activate depot_tools environment AGAIN. This is CRUCIAL
-          #source depot_tools/bootstrap_python3  # 移除
-          #export PATH="$PATH:$(pwd)/depot_tools" # 移除
-          #  创建缓存目录
-          mkdir -p android_sdk_ndk
-          export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
-          echo "ANDROID_SDK_ROOT=$(pwd)/android_sdk_ndk/sdk" >> $GITHUB_ENV
-          # 注意这里的 depot_tools 路径，需要调整为正确的位置
-          source ../depot_tools/bootstrap_python3 #  不再依赖angle/third_party
-          vpython tools/android/install-android-sdk.py --android_api_level $TARGET_ANDROID_API_LEVEL --sdk_path android_sdk_ndk/sdk --ndk_path android_sdk_ndk/ndk
+      
 
       - name: Clean Build Directory
         working-directory: angle
