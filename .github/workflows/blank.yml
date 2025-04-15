@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      DEPOT_TOOLS_PATH: depot_tools
+      DEPOT_TOOLS_PATH: angle/third_party/depot_tools  # 修改
       ANDROID_NDK_VERSION: r26d
       TARGET_ANDROID_API_LEVEL: 34
       DEPOT_TOOLS_WINTOOLCHAIN: 0
@@ -21,36 +21,37 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      #  调整 depot_tools 缓存的路径
       - name: Install depot_tools and Cache
         id: cache-depot-tools
         uses: actions/cache@v4
         with:
-          path: depot_tools
+          path: angle/third_party/depot_tools  # 修改
           key: depot_tools-${{ runner.os }}
           restore-keys: |
             depot_tools-
 
       - name: Install depot_tools if not cached
         if: steps.cache-depot-tools.outputs.cache-hit != 'true'
+        working-directory: angle/third_party # 修改
         run: |
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo "DEPOT_TOOLS=$(pwd)/depot_tools" >> $GITHUB_ENV
-          echo "PATH=$PATH:$(pwd)/depot_tools" >> $GITHUB_ENV
-          # IMPORTANT: Activate depot_tools environment.
-          source depot_tools/bootstrap_python3
-          export PATH="$PATH:$DEPOT_TOOLS"
 
       - name: Verify Install - depot_tools
+        working-directory: angle/third_party # 修改
         run: |
           pwd
           ls -al depot_tools
+          ls -al depot_tools/bootstrap_python3 # 确认 bootstrap_python3 存在
           echo "DEPOT_TOOLS env var: $DEPOT_TOOLS"
           echo "PATH env var: $PATH"
           echo "depot_tools installation verified."
 
       - name: Verify depot_tools in PATH
+        working-directory: angle # 修改
         run: |
           echo "PATH from ENV file: $PATH"
+          export PATH="$PATH:$(pwd)/third_party/depot_tools"
           which gclient
           gclient --version
           echo "gclient is accessible in PATH."
@@ -76,6 +77,7 @@ jobs:
         run: |
           echo "Starting gclient sync..."
           date
+          export PATH="$PATH:$(pwd)/third_party/depot_tools"
           gclient sync -j$(nproc)
           date
           echo "gclient sync completed."
@@ -91,15 +93,29 @@ jobs:
             angle-source-${{ runner.os }}-
 
       - name: Install Build Dependencies (Using install-build-deps.py)
+        id: install-build-deps
         working-directory: angle
         run: |
+          export PATH="$PATH:$(pwd)/third_party/depot_tools"
           sudo apt-get update
           python3 angle/build/install-build-deps.py --no-prompt
+          # 创建标记文件
+          touch .install-build-deps-success
+
+      - name: Cache Install Build Dependencies
+        id: cache-install-build-deps
+        uses: actions/cache@v4
+        with:
+          path: angle
+          key: install-build-deps-${{ runner.os }}-${{ hashFiles('angle/build/install-build-deps.py') }}
+          restore-keys: |
+            install-build-deps-${{ runner.os }}-
 
       # --- 缓存 Android SDK/NDK ---
       - name: Cache Android SDK/NDK
         id: cache-android-sdk-ndk
         uses: actions/cache@v4
+        if: steps.cache-install-build-deps.outputs.cache-hit != 'true'
         with:
           path: android_sdk_ndk  #  需要根据 install-android-sdk.py 实际安装位置来调整
           key: android-sdk-ndk-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.TARGET_ANDROID_API_LEVEL }}
@@ -108,15 +124,18 @@ jobs:
       #  --------------------------
 
       - name: Install vpython deps
-        working-directory: angle
+        working-directory: angle # 修改
         if: steps.cache-android-sdk-ndk.outputs.cache-hit != 'true'
         run: |
           # Activate depot_tools environment AGAIN. This is CRUCIAL
-          source depot_tools/bootstrap_python3
-          export PATH="$PATH:$(pwd)/depot_tools"
+          #source depot_tools/bootstrap_python3  # 移除
+          #export PATH="$PATH:$(pwd)/depot_tools" # 移除
           #  创建缓存目录，并输出到步骤结果中，以便后续使用
           mkdir -p android_sdk_ndk
+          export PATH="$PATH:$(pwd)/third_party/depot_tools"
           echo "ANDROID_SDK_ROOT=$(pwd)/android_sdk_ndk/sdk" >> $GITHUB_ENV
+          # 注意这里的 depot_tools 路径，需要调整为正确的位置
+          source third_party/depot_tools/bootstrap_python3
           vpython tools/android/install-android-sdk.py --android_api_level $TARGET_ANDROID_API_LEVEL --sdk_path android_sdk_ndk/sdk --ndk_path android_sdk_ndk/ndk
 
       - name: Clean Build Directory
@@ -133,6 +152,7 @@ jobs:
         working-directory: angle
         run: |
           # Verify that vpython exists
+          export PATH="$PATH:$(pwd)/third_party/depot_tools" # 添加
           if ! command -v vpython &> /dev/null
           then
             echo "ERROR: vpython not found in PATH!"
