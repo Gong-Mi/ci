@@ -1,55 +1,62 @@
-name: Build ANGLE - Android ARM64 (Rely on gclient sync for NDK/SDK) - 逐步验证
+name: Sync ANGLE Source Code
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-permissions:
-  contents: write  # 授予 GITHUB_TOKEN 写入权限
+  workflow_dispatch:  #  允许手动触发
 
 jobs:
-  build_angle_android_arm64_gclient_ndk:
+  sync:
     runs-on: ubuntu-latest
-
-    env:
-      ANDROID_NDK_VERSION: r26d
-      TARGET_ANDROID_API_LEVEL: 34
-      DEPOT_TOOLS_WINTOOLCHAIN: 0
-      NINJA_JOBS: $(nproc)
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4 # 确保没有额外的配置
+        uses: actions/checkout@v4
         with:
-          repository: Gong-Mi/ci  # 检出你的 workflow 配置文件
-          
-      # --- 安装 depot_tools ---
-      - name: Install depot_tools
-        run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git #  克隆到 workflow 根目录
-          export PATH="$PATH:$(pwd)/depot_tools"
-          which gclient
-          gclient --version
+          repository: Gong-Mi/ci  #  检出 workflow 配置文件
 
-      # --- 缓存 Android SDK/NDK ---
-      - name: Cache Android SDK/NDK
-        id: cache-android-sdk-ndk
+      - name: Install depot_tools and Cache
+        id: cache-depot-tools
         uses: actions/cache@v4
         with:
-          path: android_sdk_ndk  #  需要根据 install-android-sdk.py 实际安装位置来调整
-          key: android-sdk-ndk-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.TARGET_ANDROID_API_LEVEL }}
+          path: depot_tools
+          key: depot_tools-${{ runner.os }}
           restore-keys: |
-            android-sdk-ndk-${{ runner.os }}-
+            depot_tools-
 
-      - name: Install vpython deps
-        working-directory: . # 修改
-        if: steps.cache-android-sdk-ndk.outputs.cache-hit != 'true'
+      - name: Install depot_tools if not cached
+        if: steps.cache-depot-tools.outputs.cache-hit != 'true'
         run: |
-          # Activate depot_tools environment AGAIN. This is CRUCIAL
-          export PATH="$PATH:$(pwd)/depot_tools"
-          #  创建缓存目录
-          mkdir -p android_sdk_ndk
-          echo "ANDROID_SDK_ROOT=$(pwd)/android_sdk_ndk/sdk" >> $GITHUB_ENV
-          vpython depot_tools/tools/android/install-android-sdk.py --android_api_level $TARGET_ANDROID_API_LEVEL --sdk_path android_sdk_ndk/sdk --ndk_path android_sdk_ndk/ndk
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+
+      - name: Verify Install - depot_tools
+        run: |
+          pwd
+          ls -al depot_tools
+          ls -al depot_tools/bootstrap_python3
+          echo "depot_tools installation verified."
+
+      - name: Create ANGLE directory
+        run: mkdir -p angle
+
+      - name: Configure gclient
+        working-directory: angle
+        run: |
+          export PATH="$PATH:$(pwd)/../depot_tools"
+          gclient config https://chromium.googlesource.com/angle/angle.git
+
+      - name: Cache Install Build Dependencies
+        id: cache-install-build-deps
+        uses: actions/cache@v4
+        with:
+          path: angle
+          key: install-build-deps-${{ runner.os }}-${{ hashFiles('angle/build/install-build-deps.py') }}
+          restore-keys: |
+            install-build-deps-${{ runner.os }}-
+
+      - name: Cache ANGLE Source Code (gclient sync)
+        id: cache-angle-source
+        uses: actions/cache@v4
+        with:
+          path: angle
+          key: angle-source-${{ runner.os }}-${{ hashFiles('angle/.gclient', 'angle/DEPS') }}
+          restore-keys: |
+            angle-source-${{ runner.os }}-
