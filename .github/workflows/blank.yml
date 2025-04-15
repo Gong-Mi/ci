@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      DEPOT_TOOLS_PATH: angle/third_party/depot_tools
       ANDROID_NDK_VERSION: r26d
       TARGET_ANDROID_API_LEVEL: 34
       DEPOT_TOOLS_WINTOOLCHAIN: 0
@@ -23,6 +22,26 @@ jobs:
         with:
           repository: Gong-Mi/ci  # 检出你的 workflow 配置文件
 
+      # --- 创建 .gclient 和 DEPS 文件 ---
+      - name: Create gclient config
+        run: |
+          chmod +x create_gclient_config.sh
+          ./create_gclient_config.sh
+
+      - name: Add and Commit gclient config
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add .gclient DEPS
+          git commit -m "Add .gclient and DEPS files"
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+
+      # --- 安装 depot_tools 和缓存 ---
       - name: Install depot_tools and Cache
         id: cache-depot-tools
         uses: actions/cache@v4
@@ -59,7 +78,9 @@ jobs:
 
       - name: Configure gclient
         working-directory: angle
-        run: gclient config https://chromium.googlesource.com/angle/angle.git
+        run: |
+          export PATH="$PATH:$(pwd)/../depot_tools" # 添加，确保gclient可用
+          gclient config https://chromium.googlesource.com/angle/angle.git
 
       - name: Verify Configure - gclient
         working-directory: angle
