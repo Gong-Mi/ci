@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: write  # 授予 GITHUB_TOKEN 写入权限
+
 jobs:
   build_angle_android_arm64_gclient_ndk:
     runs-on: ubuntu-latest
@@ -149,7 +152,7 @@ jobs:
           # Activate depot_tools environment AGAIN. This is CRUCIAL
           #source depot_tools/bootstrap_python3  # 移除
           #export PATH="$PATH:$(pwd)/depot_tools" # 移除
-          #  创建缓存目录，并输出到步骤结果中，以便后续使用
+          #  创建缓存目录
           mkdir -p android_sdk_ndk
           export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
           echo "ANDROID_SDK_ROOT=$(pwd)/android_sdk_ndk/sdk" >> $GITHUB_ENV
