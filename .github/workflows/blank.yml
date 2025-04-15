@@ -14,9 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      ANDROID_NDK_VERSION: r26d
-      TARGET_ANDROID_API_LEVEL: 34
-      DEPOT_TOOLS_WINTOOLCHAIN: 0
+      
       NINJA_JOBS: $(nproc)
 
     steps:
