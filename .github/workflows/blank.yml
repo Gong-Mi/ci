@@ -1,168 +1,107 @@
-name: Build ANGLE - Android ARM64 (Rely on gclient sync for NDK/SDK) - 逐步验证
+name: Build ANGLE - Android ARM64 (Using Local args.gn Template)
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-
-permissions:
-  contents: write  # 授予 GITHUB_TOKEN 写入权限
+  workflow_dispatch:
 
 jobs:
-  build_angle_android_arm64_gclient_ndk:
+  build_angle_android_arm64_local_args:
     runs-on: ubuntu-latest
 
     env:
-      
-      NINJA_JOBS: $(nproc)
+      # 定义 API Level，envsubst 会用到
+      TARGET_ANDROID_API_LEVEL: 23 # 确保这里设置了值
+      # 定义模板文件相对于仓库根目录的路径
+      ARGS_TEMPLATE_PATH: "angle_android_arm64.args.gn.template" # 修改为你实际的路径
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4 # 确保没有额外的配置
-        with:
-          repository: Gong-Mi/ci  # 检出你的 workflow 配置文件
+      - name: Checkout CI Repository (Gong-Mi/ci)
+        uses: actions/checkout@v4
+        # 默认检出到 $GITHUB_WORKSPACE
 
-      
-    
-
-      - name: Push changes
-        uses: ad-m/github-push-action@master
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ github.ref }}
-
-      # --- 安装 depot_tools 和缓存 ---
-      - name: Install depot_tools and Cache
+      # --- Setup depot_tools (与之前相同) ---
+      - name: Cache depot_tools
         id: cache-depot-tools
         uses: actions/cache@v4
         with:
-          path: depot_tools #  不再依赖angle/third_party
+          path: depot_tools
           key: depot_tools-${{ runner.os }}
-          restore-keys: |
-            depot_tools-
-
-      - name: Install depot_tools if not cached
+      - name: Clone depot_tools if not cached
         if: steps.cache-depot-tools.outputs.cache-hit != 'true'
-        run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git #  克隆到 workflow 根目录
+        run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git depot_tools
+      - name: Add depot_tools to PATH
+        run: echo "$(pwd)/depot_tools" >> $GITHUB_PATH
 
-      - name: Verify Install - depot_tools
-        run: | #  不再依赖angle/third_party
-          pwd
-          ls -al depot_tools
-          ls -al depot_tools/bootstrap_python3 # 确认 bootstrap_python3 存在
-          echo "DEPOT_TOOLS env var: $DEPOT_TOOLS"
-          echo "PATH env var: $PATH"
-          echo "depot_tools installation verified."
-
-      - name: Verify depot_tools in PATH
-        run: | #  不再依赖angle
-          echo "PATH from ENV file: $PATH"
-          export PATH="$PATH:$(pwd)/depot_tools"
-          which gclient
-          gclient --version
-          echo "gclient is accessible in PATH."
-
+      # --- Get ANGLE Source (与之前类似) ---
       - name: Create ANGLE directory
         run: mkdir -p angle
-
-      - name: Configure gclient
-        working-directory: angle
-        run: |
-          export PATH="$PATH:$(pwd)/../depot_tools" # 添加，确保gclient可用
-          gclient config https://chromium.googlesource.com/angle/angle.git
-
-      - name: Verify Configure - gclient
-        working-directory: angle
-        run: |
-          ls -al
-          cat .gclient
-          echo "gclient configuration verified."
-
-      - name: Sync ANGLE Source Code (Using gclient sync for initial checkout)
-        id: gclient-sync
-        working-directory: angle
-        if: steps.cache-angle-source.outputs.cache-hit != 'true' #只有在没有源码缓存时才 sync
-        run: |
-          echo "Starting gclient sync..."
-          date
-          export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
-          gclient sync -j$(nproc)
-          date
-          echo "gclient sync completed."
-
-      - name: Cache ANGLE Source Code (gclient sync)
+      - name: Cache ANGLE Source + Dependencies
         id: cache-angle-source
         uses: actions/cache@v4
-        if: steps.gclient-sync.outcome == 'success' # 只有在上一步成功时才缓存
         with:
           path: angle
-          key: angle-source-${{ runner.os }}-${{ hashFiles('angle/.gclient', 'angle/DEPS') }}
+          key: angle-src-deps-${{ runner.os }}-gclient-${{ hashFiles('.gitmodules') }} # 或者其他合适的 key
           restore-keys: |
-            angle-source-${{ runner.os }}-
-
-      - name: Install Build Dependencies (Using install-build-deps.py)
-        id: install-build-deps
+            angle-src-deps-${{ runner.os }}-gclient-
+      - name: Configure gclient
+        if: steps.cache-angle-source.outputs.cache-hit != 'true'
+        working-directory: angle
+        run: gclient config https://chromium.googlesource.com/angle/angle.git --unmanaged
+      - name: Sync ANGLE Source Code and Dependencies (gclient sync)
+        if: steps.cache-angle-source.outputs.cache-hit != 'true'
         working-directory: angle
         run: |
-          export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
-          sudo apt-get update
-          python3 angle/build/install-build-deps.py --no-prompt
-          # 创建标记文件
-          touch .install-build-deps-success
+          gclient sync --with_branch_heads --with_tags --force --delete_unversioned_trees -j$(nproc)
+          ls -d third_party/android* || echo "NDK/SDK check"
 
-      - name: Cache Install Build Dependencies
-        id: cache-install-build-deps
-        uses: actions/cache@v4
-        with:
-          path: angle
-          key: install-build-deps-${{ runner.os }}-${{ hashFiles('angle/build/install-build-deps.py') }}
-          restore-keys: |
-            install-build-deps-${{ runner.os }}-
-
-      # --- 缓存 Android SDK/NDK ---
-      - name: Cache Android SDK/NDK
-        id: cache-android-sdk-ndk
-        uses: actions/cache@v4
-        if: steps.cache-install-build-deps.outputs.cache-hit != 'true'
-        with:
-          path: android_sdk_ndk  #  需要根据 install-android-sdk.py 实际安装位置来调整
-          key: android-sdk-ndk-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.TARGET_ANDROID_API_LEVEL }}
-          restore-keys: |
-            android-sdk-ndk-${{ runner.os }}-
-      #  --------------------------
-
-      
-
-      - name: Clean Build Directory
-        working-directory: angle
+      # --- Install Host Build Dependencies (与之前相同) ---
+      - name: Install Host Build Dependencies & envsubst
+        working-directory: angle # 或者在外面运行 sudo apt-get
         run: |
-          if [ -d "out/Android_ARM64" ]; then
-            rm -rf out/Android_ARM64/*
-            echo "Build directory cleaned."
-          else
-            echo "Build directory does not exist; skipping clean."
+          echo "Installing host dependencies and gettext (for envsubst)..."
+          sudo apt-get update -y
+          sudo apt-get install -y gettext # 安装 envsubst 工具
+          # 继续安装 ANGLE 可能需要的其他 host 依赖
+          if [ -f "build/install-build-deps.py" ]; then
+            python3 build/install-build-deps.py --no-prompt
           fi
 
-      
+      # --- Prepare and Generate Build Files ---
+      - name: Prepare ANGLE Build Directory
+        run: mkdir -p angle/out/Android_ARM64
 
-      - name: Configure ANGLE Build (GN) - Android ARM64
+      - name: Prepare args.gn from Template
+        run: |
+          echo "Preparing args.gn from template: ${{ env.ARGS_TEMPLATE_PATH }}"
+          ls -l ${{ env.ARGS_TEMPLATE_PATH }} # 确认模板文件存在
+          # 使用 envsubst 替换模板中的 ${TARGET_ANDROID_API_LEVEL}
+          envsubst < "${{ env.ARGS_TEMPLATE_PATH }}" > angle/out/Android_ARM64/args.gn
+          echo "Generated angle/out/Android_ARM64/args.gn:"
+          cat angle/out/Android_ARM64/args.gn
+
+      - name: Configure ANGLE Build (GN - using prepared args.gn)
         working-directory: angle
         run: |
-          gn gen out/Android_ARM64 --args="target_os=\"android\" target_cpu=\"arm64\" android_ndk_api_level=$TARGET_ANDROID_API_LEVEL is_debug=false angle_build_gl=false angle_build_gles=true angle_build_vulkan=true angle_build_d3d=false angle_build_metal=false"
-          cat out/Android_ARM64/args.gn
-          echo "ANGLE build configuration generated."
+          # depot_tools (gn) should be in PATH
+          # 不需要 --args 了，gn 会自动读取 out/Android_ARM64/args.gn
+          gn gen out/Android_ARM64
+          echo "GN generation complete (used args.gn)."
 
+      # --- Build ANGLE (与之前相同) ---
       - name: Build ANGLE (Ninja) - Android ARM64
         working-directory: angle
         run: |
-          ninja -C out/Android_ARM64 angle_library -j${{ env.NINJA_JOBS }}
-          echo "ANGLE library built."
+          # depot_tools (ninja) should be in PATH
+          ninja -C out/Android_ARM64 angle_library -j$(nproc)
+          echo "ANGLE library build finished."
 
+      # --- Upload Artifact (与之前相同) ---
       - name: Upload Build Artifacts - Android ARM64
         uses: actions/upload-artifact@v4
         with:
-          name: angle-android-arm64-release-build-gclient-ndk
+          name: angle-android-arm64-release-local-args
           path: angle/out/Android_ARM64/libangle.so
           if-no-files-found: error
