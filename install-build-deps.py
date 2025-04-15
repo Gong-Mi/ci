@@ -712,4 +712,263 @@ def nacl_list(options):
   ]
 
   for package in packages:
-    if not
+   if not package_exists(package):
+      print("Skipping NaCl, NaCl toolchain, NaCl ports dependencies because %s "
+            "is not available" % package,
+            file=sys.stderr)
+      return []
+
+  print("Including NaCl, NaCl toolchain, NaCl ports dependencies.",
+        file=sys.stderr)
+
+  # Prefer lib32ncurses5-dev to match libncurses5:i386 if it exists.
+  # In some Ubuntu releases, lib32ncurses5-dev is a transition package to
+  # lib32ncurses-dev, so use that as a fallback.
+  if package_exists("lib32ncurses5-dev"):
+    packages.append("lib32ncurses5-dev")
+  else:
+    packages.append("lib32ncurses-dev")
+
+  return packages
+
+
+# Packages suffixed with t64 are "transition packages" and should be preferred.
+def maybe_append_t64(package):
+  name = package.split(":")
+  name[0] += "t64"
+  renamed = ":".join(name)
+  return renamed if package_exists(renamed) else package
+
+
+# Debian is in the process of transitioning to automatic debug packages, which
+# have the -dbgsym suffix (https://wiki.debian.org/AutomaticDebugPackages).
+# Untransitioned packages have the -dbg suffix.  And on some systems, neither
+# will be available, so exclude the ones that are missing.
+def dbg_package_name(package):
+  package = maybe_append_t64(package)
+  if package_exists(package + "-dbgsym"):
+    return [package + "-dbgsym"]
+  if package_exists(package + "-dbg"):
+    return [package + "-dbg"]
+  return []
+
+
+def dbg_list(options):
+  if not options.syms:
+    print("Skipping debugging symbols.", file=sys.stderr)
+    return []
+  print("Including debugging symbols.", file=sys.stderr)
+
+  packages = [
+      dbg_package for package in lib_list()
+      for dbg_package in dbg_package_name(package)
+  ]
+
+  # Debugging symbols packages not following common naming scheme
+  if not dbg_package_name("libstdc++6"):
+    for version in ["8", "7", "6", "5", "4.9", "4.8", "4.7", "4.6"]:
+      if package_exists("libstdc++6-%s-dbg" % version):
+        packages.append("libstdc++6-%s-dbg" % version)
+        break
+
+  if not dbg_package_name("libatk1.0-0"):
+    packages.extend(dbg_package_name("libatk1.0"))
+
+  if not dbg_package_name("libpango-1.0-0"):
+    packages.extend(dbg_package_name("libpango1.0-dev"))
+
+  return packages
+
+
+def package_list(options):
+  packages = (dev_list() + lib_list() + dbg_list(options) +
+              lib32_list(options) + arm_list(options) + nacl_list(options) +
+              backwards_compatible_list(options))
+  packages = [maybe_append_t64(package) for package in set(packages)]
+
+  if requires_pinned_linux_libc():
+    add_version_workaround(packages)
+
+  # Sort all the :i386 packages to the front, to avoid confusing dpkg-query
+  # (https://crbug.com/446172).
+  return sorted(packages, key=lambda x: (not x.endswith(":i386"), x))
+
+
+def missing_packages(packages):
+  try:
+    subprocess.run(
+        ["dpkg-query", "-W", "-f", " "] + packages,
+        check=True,
+        capture_output=True,
+    )
+    return []
+  except subprocess.CalledProcessError as e:
+    return [
+        line.split(" ")[-1] for line in e.stderr.decode().strip().splitlines()
+    ]
+
+
+def package_is_installable(package):
+  result = subprocess.run(["apt-cache", "show", package], capture_output=True)
+  return result.returncode == 0
+
+
+def quick_check(options):
+  if not options.quick_check:
+    return
+
+  missing = missing_packages(package_list(options))
+  if not missing:
+    sys.exit(0)
+
+  not_installed = []
+  unknown = []
+  for p in missing:
+    if package_is_installable(p):
+      not_installed.append(p)
+    else:
+      unknown.append(p)
+
+  if not_installed:
+    print("WARNING: The following packages are not installed:", file=sys.stderr)
+    print(" ".join(not_installed), file=sys.stderr)
+
+  if unknown:
+    print("WARNING: The following packages are unknown to your system",
+          file=sys.stderr)
+    print("(maybe missing a repo or need to 'sudo apt-get update'):",
+          file=sys.stderr)
+    print(" ".join(unknown), file=sys.stderr)
+
+  sys.exit(1)
+
+
+def find_missing_packages(options):
+  print("Finding missing packages...", file=sys.stderr)
+
+  packages = package_list(options)
+  packages_str = " ".join(packages)
+  print("Packages required: " + packages_str, file=sys.stderr)
+
+  query_cmd = ["apt-get", "--just-print", "install"] + packages
+  env = os.environ.copy()
+  env["LANGUAGE"] = "en"
+  env["LANG"] = "C"
+  cmd_output = subprocess.check_output(query_cmd, env=env).decode()
+  lines = cmd_output.splitlines()
+
+  install = []
+  for pattern in (
+      "The following NEW packages will be installed:",
+      "The following packages will be upgraded:",
+  ):
+    if pattern in lines:
+      for line in lines[lines.index(pattern) + 1:]:
+        if not line.startswith("  "):
+          break
+        install += line.strip().split(" ")
+
+  if requires_pinned_linux_libc():
+    add_version_workaround(install)
+
+  return install
+
+
+def install_packages(options):
+  try:
+    packages = find_missing_packages(options)
+    if packages:
+      quiet = ["-qq", "--assume-yes"] if options.no_prompt else []
+      subprocess.check_call(["sudo", "apt-get", "install"] + quiet + packages)
+      print(file=sys.stderr)
+    else:
+      print("No missing packages, and the packages are up to date.",
+            file=sys.stderr)
+
+  except subprocess.CalledProcessError as e:
+    # An apt-get exit status of 100 indicates that a real error has occurred.
+    print("`apt-get --just-print install ...` failed", file=sys.stderr)
+    if e.stdout is not None:
+      print("It produced the following output:", file=sys.stderr)
+      print(e.stdout, file=sys.stderr)
+    print("You will have to install the above packages yourself.",
+          file=sys.stderr)
+    print(file=sys.stderr)
+    sys.exit(100)
+
+
+# Install the Chrome OS default fonts. This must go after running
+# apt-get, since install-chromeos-fonts depends on curl.
+def install_chromeos_fonts(options):
+  if not options.chromeos_fonts:
+    print("Skipping installation of Chrome OS fonts.", file=sys.stderr)
+    return
+  print("Installing Chrome OS fonts.", file=sys.stderr)
+
+  dir = os.path.abspath(os.path.dirname(__file__))
+
+  try:
+    subprocess.check_call(
+        ["sudo",
+         os.path.join(dir, "linux", "install-chromeos-fonts.py")])
+  except subprocess.CalledProcessError:
+    print("ERROR: The installation of the Chrome OS default fonts failed.",
+          file=sys.stderr)
+    if (subprocess.check_output(
+        ["stat", "-f", "-c", "%T", dir], ).decode().startswith("nfs")):
+      print(
+          "The reason is that your repo is installed on a remote file system.",
+          file=sys.stderr)
+    else:
+      print(
+          "This is expected if your repo is installed on a remote file system.",
+          file=sys.stderr)
+
+    print("It is recommended to install your repo on a local file system.",
+          file=sys.stderr)
+    print("You can skip the installation of the Chrome OS default fonts with",
+          file=sys.stderr)
+    print("the command line option: --no-chromeos-fonts.", file=sys.stderr)
+    sys.exit(1)
+
+
+def install_locales():
+  print("Installing locales.", file=sys.stderr)
+  CHROMIUM_LOCALES = [
+      "da_DK.UTF-8", "en_US.UTF-8", "fr_FR.UTF-8", "he_IL.UTF-8", "zh_TW.UTF-8"
+  ]
+  LOCALE_GEN = "/etc/locale.gen"
+  if os.path.exists(LOCALE_GEN):
+    old_locale_gen = open(LOCALE_GEN).read()
+    for locale in CHROMIUM_LOCALES:
+      subprocess.check_call(
+          ["sudo", "sed", "-i",
+           "s/^# %s/%s/" % (locale, locale), LOCALE_GEN])
+
+    # Regenerating locales can take a while, so only do it if we need to.
+    locale_gen = open(LOCALE_GEN).read()
+    if locale_gen != old_locale_gen:
+      subprocess.check_call(["sudo", "locale-gen"])
+    else:
+      print("Locales already up-to-date.", file=sys.stderr)
+  else:
+    for locale in CHROMIUM_LOCALES:
+      subprocess.check_call(["sudo", "locale-gen", locale])
+
+
+def main():
+  options = parse_args(sys.argv[1:])
+  check_lsb_release()
+  check_distro(options)
+  check_architecture()
+  quick_check(options)
+  check_root()
+  apt_update(options)
+  install_packages(options)
+  install_chromeos_fonts(options)
+  install_locales()
+  return 0
+
+
+if __name__ == "__main__":
+  sys.exit(main())
