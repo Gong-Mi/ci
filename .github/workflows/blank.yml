@@ -26,12 +26,7 @@ jobs:
           repository: Gong-Mi/ci  # 检出你的 workflow 配置文件
 
       
-      - name: Add and Commit gclient config
-        run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
-          git add .gclient DEPS
-          git commit -m "Add .gclient and DEPS files"
+    
 
       - name: Push changes
         uses: ad-m/github-push-action@master
