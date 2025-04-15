@@ -1,43 +1,7 @@
-name: Sync ANGLE Source Code
-
-on:
-  workflow_dispatch:  #  允许手动触发
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          repository: Gong-Mi/ci  #  检出 workflow 配置文件 (包含 install-build-deps.py)
-
-      - name: Install depot_tools and Cache
-        id: cache-depot-tools
-        uses: actions/cache@v4
-        with:
-          path: depot_tools
-          key: depot_tools-${{ runner.os }}
-          restore-keys: |
-            depot_tools-
-
-      - name: Install depot_tools if not cached
-        if: steps.cache-depot-tools.outputs.cache-hit != 'true'
-        run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-
-      - name: Verify Install - depot_tools
-        run: |
-          pwd
-          ls -al depot_tools
-          ls -al depot_tools/bootstrap_python3
-          echo "depot_tools installation verified."
-
       - name: Install Build Dependencies  #  直接运行本地脚本，提前执行
         run: |
-          export PATH="$PATH:$(pwd)/depot_tools"  #  depot_tools 和 install-build-deps.py 在同一仓库中
-          python install-build-deps.py
+          export PATH="$PATH:$(pwd)/depot_tools"  #  depot_tools 和 install-build-deps.py 在同一仓库根目录
+          python install-build-deps.py  #  直接运行根目录下的脚本，路径正确
 
       - name: Create ANGLE directory
         run: mkdir -p angle
@@ -56,14 +20,3 @@ jobs:
           key: install-build-deps-${{ runner.os }}-${{ hashFiles('install-build-deps.py') }} #  重要: 缓存 Key 依赖于 install-build-deps.py 脚本自身
           restore-keys: |
             install-build-deps-${{ runner.os }}-
-
-      
-
-      - name: Cache ANGLE Source Code (gclient sync) # 缓存同步后的源码，在 gclient sync 之后
-        id: cache-angle-source
-        uses: actions/cache@v4
-        with:
-          path: angle  # 缓存 angle 目录，包含同步后的源码和依赖
-          key: angle-source-${{ runner.os }}-${{ hashFiles('angle/.gclient', 'angle/DEPS') }}
-          restore-keys: |
-            angle-source-${{ runner.os }}-
