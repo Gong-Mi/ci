@@ -27,6 +27,8 @@ jobs:
         with:
           path: depot_tools
           key: depot_tools-${{ runner.os }}
+          restore-keys: |
+            depot_tools-
 
       - name: Install depot_tools if not cached
         if: steps.cache-depot-tools.outputs.cache-hit != 'true'
@@ -34,6 +36,9 @@ jobs:
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
           echo "DEPOT_TOOLS=$(pwd)/depot_tools" >> $GITHUB_ENV
           echo "PATH=$PATH:$(pwd)/depot_tools" >> $GITHUB_ENV
+          # IMPORTANT: Activate depot_tools environment.
+          source depot_tools/bootstrap_python3
+          export PATH="$PATH:$DEPOT_TOOLS"
 
       - name: Verify Install - depot_tools
         run: |
@@ -64,15 +69,10 @@ jobs:
           cat .gclient
           echo "gclient configuration verified."
 
-      - name: Cache ANGLE Source Code (gclient sync)
-        id: cache-angle-source
-        uses: actions/cache@v4
-        with:
-          path: angle
-          key: angle-source-${{ runner.os }}-${{ hashFiles('angle/.gclient') }}
-
       - name: Sync ANGLE Source Code (Using gclient sync for initial checkout)
+        id: gclient-sync
         working-directory: angle
+        if: steps.cache-angle-source.outputs.cache-hit != 'true' #只有在没有源码缓存时才 sync
         run: |
           echo "Starting gclient sync..."
           date
@@ -80,29 +80,68 @@ jobs:
           date
           echo "gclient sync completed."
 
+      - name: Cache ANGLE Source Code (gclient sync)
+        id: cache-angle-source
+        uses: actions/cache@v4
+        if: steps.gclient-sync.outcome == 'success' # 只有在上一步成功时才缓存
+        with:
+          path: angle
+          key: angle-source-${{ runner.os }}-${{ hashFiles('angle/.gclient', 'angle/DEPS') }}
+          restore-keys: |
+            angle-source-${{ runner.os }}-
+
       - name: Install Build Dependencies (Using install-build-deps.py)
         working-directory: angle
         run: |
           sudo apt-get update
-          python3 build/install-build-deps.py --no-prompt
+          python3 angle/build/install-build-deps.py --no-prompt
+
+      # --- 缓存 Android SDK/NDK ---
+      - name: Cache Android SDK/NDK
+        id: cache-android-sdk-ndk
+        uses: actions/cache@v4
+        with:
+          path: android_sdk_ndk  #  需要根据 install-android-sdk.py 实际安装位置来调整
+          key: android-sdk-ndk-${{ runner.os }}-${{ env.ANDROID_NDK_VERSION }}-${{ env.TARGET_ANDROID_API_LEVEL }}
+          restore-keys: |
+            android-sdk-ndk-${{ runner.os }}-
+      #  --------------------------
 
       - name: Install vpython deps
         working-directory: angle
+        if: steps.cache-android-sdk-ndk.outputs.cache-hit != 'true'
         run: |
-          vpython tools/android/install-android-sdk.py --android_api_level $TARGET_ANDROID_API_LEVEL
+          # Activate depot_tools environment AGAIN. This is CRUCIAL
+          source depot_tools/bootstrap_python3
+          export PATH="$PATH:$(pwd)/depot_tools"
+          #  创建缓存目录，并输出到步骤结果中，以便后续使用
+          mkdir -p android_sdk_ndk
+          echo "ANDROID_SDK_ROOT=$(pwd)/android_sdk_ndk/sdk" >> $GITHUB_ENV
+          vpython tools/android/install-android-sdk.py --android_api_level $TARGET_ANDROID_API_LEVEL --sdk_path android_sdk_ndk/sdk --ndk_path android_sdk_ndk/ndk
 
       - name: Clean Build Directory
         working-directory: angle
         run: |
-          rm -rf out/Android_ARM64/*
-          echo "Build directory cleaned."
+          if [ -d "out/Android_ARM64" ]; then
+            rm -rf out/Android_ARM64/*
+            echo "Build directory cleaned."
+          else
+            echo "Build directory does not exist; skipping clean."
+          fi
 
       - name: Verify NDK Location After Sync
         working-directory: angle
         run: |
-          NDK_PATH=$(find . -name "ndk" -type d -print -quit)
+          # Verify that vpython exists
+          if ! command -v vpython &> /dev/null
+          then
+            echo "ERROR: vpython not found in PATH!"
+            exit 1
+          fi
+          #  使用缓存的路径或者新安装的路径
+          NDK_PATH=$(find android_sdk_ndk -name "ndk" -type d -print -quit)
           if [ -z "$NDK_PATH" ]; then
-            echo "ERROR: NDK directory not found after gclient sync. Check gclient sync output and ensure the 'ndk' directory exists in the ANGLE tree as configured by ANGLE's DEPS file. If sync succeeded, NDK may not be needed until GN generation."
+            echo "ERROR: NDK directory not found after gclient sync."
             exit 1
           else
             echo "NDK found at: $NDK_PATH"
