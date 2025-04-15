@@ -19,37 +19,26 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4 # 确保没有额外的配置，例如 sparse checkout
+        uses: actions/checkout@v4 # 确保没有额外的配置
         with:
-          repository: Gong-Mi/ci  # 确保使用正确的用户名
-          sparse-checkout-cone-mode: false # 禁用 sparse checkout cone mode
+          repository: Gong-Mi/ci  # 检出你的 workflow 配置文件
 
-      - name: Verify Checkout
-        run: |
-          pwd
-          ls -al # 查看仓库的根目录
-          ls -al angle || true # 确认 angle 目录是否存在，如果不存在则忽略错误
-          ls -al angle/third_party || true # 确认 angle/third_party 目录是否存在，如果不存在则忽略错误
-
-      #  调整 depot_tools 缓存的路径
       - name: Install depot_tools and Cache
         id: cache-depot-tools
         uses: actions/cache@v4
         with:
-          path: angle/third_party/depot_tools
+          path: depot_tools #  不再依赖angle/third_party
           key: depot_tools-${{ runner.os }}
           restore-keys: |
             depot_tools-
 
       - name: Install depot_tools if not cached
         if: steps.cache-depot-tools.outputs.cache-hit != 'true'
-        working-directory: angle/third_party
         run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git #  克隆到 workflow 根目录
 
       - name: Verify Install - depot_tools
-        working-directory: angle/third_party
-        run: |
+        run: | #  不再依赖angle/third_party
           pwd
           ls -al depot_tools
           ls -al depot_tools/bootstrap_python3 # 确认 bootstrap_python3 存在
@@ -58,10 +47,9 @@ jobs:
           echo "depot_tools installation verified."
 
       - name: Verify depot_tools in PATH
-        working-directory: angle
-        run: |
+        run: | #  不再依赖angle
           echo "PATH from ENV file: $PATH"
-          export PATH="$PATH:$(pwd)/third_party/depot_tools"
+          export PATH="$PATH:$(pwd)/depot_tools"
           which gclient
           gclient --version
           echo "gclient is accessible in PATH."
@@ -87,7 +75,7 @@ jobs:
         run: |
           echo "Starting gclient sync..."
           date
-          export PATH="$PATH:$(pwd)/third_party/depot_tools"
+          export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
           gclient sync -j$(nproc)
           date
           echo "gclient sync completed."
@@ -106,7 +94,7 @@ jobs:
         id: install-build-deps
         working-directory: angle
         run: |
-          export PATH="$PATH:$(pwd)/third_party/depot_tools"
+          export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
           sudo apt-get update
           python3 angle/build/install-build-deps.py --no-prompt
           # 创建标记文件
@@ -142,10 +130,10 @@ jobs:
           #export PATH="$PATH:$(pwd)/depot_tools" # 移除
           #  创建缓存目录，并输出到步骤结果中，以便后续使用
           mkdir -p android_sdk_ndk
-          export PATH="$PATH:$(pwd)/third_party/depot_tools"
+          export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
           echo "ANDROID_SDK_ROOT=$(pwd)/android_sdk_ndk/sdk" >> $GITHUB_ENV
           # 注意这里的 depot_tools 路径，需要调整为正确的位置
-          source third_party/depot_tools/bootstrap_python3
+          source ../depot_tools/bootstrap_python3 #  不再依赖angle/third_party
           vpython tools/android/install-android-sdk.py --android_api_level $TARGET_ANDROID_API_LEVEL --sdk_path android_sdk_ndk/sdk --ndk_path android_sdk_ndk/ndk
 
       - name: Clean Build Directory
@@ -162,7 +150,7 @@ jobs:
         working-directory: angle
         run: |
           # Verify that vpython exists
-          export PATH="$PATH:$(pwd)/third_party/depot_tools" # 添加
+          export PATH="$PATH:$(pwd)/../depot_tools" #  不再依赖angle/third_party
           if ! command -v vpython &> /dev/null
           then
             echo "ERROR: vpython not found in PATH!"
