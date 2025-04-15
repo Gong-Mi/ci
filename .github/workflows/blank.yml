@@ -21,8 +21,9 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4 # 确保没有额外的配置，例如 sparse checkout
         with:
-          repository: 你自己的用户名/ci  # 你自己的用户名替换成你自己的用户名
-          sparse-checkout-cone-mode: true # 使用 sparse checkout cone mode
+          repository: Gong-Mi/ci  # 确保使用正确的用户名
+          sparse-checkout-cone-mode: false # 禁用 sparse checkout cone mode
+
       - name: Verify Checkout
         run: |
           pwd
@@ -139,4 +140,61 @@ jobs:
           # Activate depot_tools environment AGAIN. This is CRUCIAL
           #source depot_tools/bootstrap_python3  # 移除
           #export PATH="$PATH:$(pwd)/depot_tools" # 移除
-          #  创建缓存目录
+          #  创建缓存目录，并输出到步骤结果中，以便后续使用
+          mkdir -p android_sdk_ndk
+          export PATH="$PATH:$(pwd)/third_party/depot_tools"
+          echo "ANDROID_SDK_ROOT=$(pwd)/android_sdk_ndk/sdk" >> $GITHUB_ENV
+          # 注意这里的 depot_tools 路径，需要调整为正确的位置
+          source third_party/depot_tools/bootstrap_python3
+          vpython tools/android/install-android-sdk.py --android_api_level $TARGET_ANDROID_API_LEVEL --sdk_path android_sdk_ndk/sdk --ndk_path android_sdk_ndk/ndk
+
+      - name: Clean Build Directory
+        working-directory: angle
+        run: |
+          if [ -d "out/Android_ARM64" ]; then
+            rm -rf out/Android_ARM64/*
+            echo "Build directory cleaned."
+          else
+            echo "Build directory does not exist; skipping clean."
+          fi
+
+      - name: Verify NDK Location After Sync
+        working-directory: angle
+        run: |
+          # Verify that vpython exists
+          export PATH="$PATH:$(pwd)/third_party/depot_tools" # 添加
+          if ! command -v vpython &> /dev/null
+          then
+            echo "ERROR: vpython not found in PATH!"
+            exit 1
+          fi
+          #  使用缓存的路径或者新安装的路径
+          NDK_PATH=$(find android_sdk_ndk -name "ndk" -type d -print -quit)
+          if [ -z "$NDK_PATH" ]; then
+            echo "ERROR: NDK directory not found after gclient sync."
+            exit 1
+          else
+            echo "NDK found at: $NDK_PATH"
+            export ANDROID_NDK_HOME="$NDK_PATH"
+            echo "ANDROID_NDK_HOME set to: $ANDROID_NDK_HOME"
+          fi
+
+      - name: Configure ANGLE Build (GN) - Android ARM64
+        working-directory: angle
+        run: |
+          gn gen out/Android_ARM64 --args='target_os="android" target_cpu="arm64" android_ndk_api_level=$TARGET_ANDROID_API_LEVEL is_debug=false angle_build_gl=false angle_build_gles=true angle_build_vulkan=true angle_build_d3d=false angle_build_metal=false'
+          cat out/Android_ARM64/args.gn
+          echo "ANGLE build configuration generated."
+
+      - name: Build ANGLE (Ninja) - Android ARM64
+        working-directory: angle
+        run: |
+          ninja -C out/Android_ARM64 angle_library -j${{ env.NINJA_JOBS }}
+          echo "ANGLE library built."
+
+      - name: Upload Build Artifacts - Android ARM64
+        uses: actions/upload-artifact@v4
+        with:
+          name: angle-android-arm64-release-build-gclient-ndk
+          path: angle/out/Android_ARM64/libangle.so
+          if-no-files-found: error
