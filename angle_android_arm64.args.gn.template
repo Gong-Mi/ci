@@ -1,0 +1,13 @@
+# angle_android_arm64.args.gn.template
+target_os = "android"
+target_cpu = "arm64"
+# 使用占位符，方便后面替换
+android_ndk_api_level = ${TARGET_ANDROID_API_LEVEL}
+is_debug = false
+angle_build_gl = false
+angle_build_gles = true
+angle_build_vulkan = true
+angle_build_d3d = false
+angle_build_metal = false
+
+# 你可以添加其他需要的 ANGLE 参数
