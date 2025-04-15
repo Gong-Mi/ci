@@ -25,12 +25,7 @@ jobs:
         with:
           repository: Gong-Mi/ci  # 检出你的 workflow 配置文件
 
-      # --- 创建 .gclient 和 DEPS 文件 ---
-      - name: Create gclient config
-        run: |
-          chmod +x create_gclient_config.sh
-          ./create_gclient_config.sh
-
+      
       - name: Add and Commit gclient config
         run: |
           git config --local user.email "actions@github.com"
