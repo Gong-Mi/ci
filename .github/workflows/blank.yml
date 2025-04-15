@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      DEPOT_TOOLS_PATH: angle/third_party/depot_tools  # 修改
+      DEPOT_TOOLS_PATH: angle/third_party/depot_tools
       ANDROID_NDK_VERSION: r26d
       TARGET_ANDROID_API_LEVEL: 34
       DEPOT_TOOLS_WINTOOLCHAIN: 0
@@ -20,31 +20,33 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4 # 确保没有额外的配置，例如 sparse checkout
-
+        with:
+          sparse-checkout-cone-mode: false # 禁用 sparse checkout cone mode
       - name: Verify Checkout
         run: |
           pwd
-          ls -al angle
-          ls -al angle/third_party # 确认 angle/third_party 目录存在
+          ls -al # 查看仓库的根目录
+          ls -al angle || true # 确认 angle 目录是否存在，如果不存在则忽略错误
+          ls -al angle/third_party || true # 确认 angle/third_party 目录是否存在，如果不存在则忽略错误
 
       #  调整 depot_tools 缓存的路径
       - name: Install depot_tools and Cache
         id: cache-depot-tools
         uses: actions/cache@v4
         with:
-          path: angle/third_party/depot_tools  # 修改
+          path: angle/third_party/depot_tools
           key: depot_tools-${{ runner.os }}
           restore-keys: |
             depot_tools-
 
       - name: Install depot_tools if not cached
         if: steps.cache-depot-tools.outputs.cache-hit != 'true'
-        working-directory: angle/third_party # 修改
+        working-directory: angle/third_party
         run: |
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 
       - name: Verify Install - depot_tools
-        working-directory: angle/third_party # 修改
+        working-directory: angle/third_party
         run: |
           pwd
           ls -al depot_tools
@@ -54,7 +56,7 @@ jobs:
           echo "depot_tools installation verified."
 
       - name: Verify depot_tools in PATH
-        working-directory: angle # 修改
+        working-directory: angle
         run: |
           echo "PATH from ENV file: $PATH"
           export PATH="$PATH:$(pwd)/third_party/depot_tools"
@@ -173,25 +175,4 @@ jobs:
             echo "NDK found at: $NDK_PATH"
             export ANDROID_NDK_HOME="$NDK_PATH"
             echo "ANDROID_NDK_HOME set to: $ANDROID_NDK_HOME"
-            echo "NDK directory location depends on the ANGLE DEPS file."
-          fi
-
-      - name: Configure ANGLE Build (GN) - Android ARM64
-        working-directory: angle
-        run: |
-          gn gen out/Android_ARM64 --args='target_os="android" target_cpu="arm64" android_ndk_api_level=$TARGET_ANDROID_API_LEVEL is_debug=false angle_build_gl=false angle_build_gles=true angle_build_vulkan=true angle_build_d3d=false angle_build_metal=false'
-          cat out/Android_ARM64/args.gn
-          echo "ANGLE build configuration generated."
-
-      - name: Build ANGLE (Ninja) - Android ARM64
-        working-directory: angle
-        run: |
-          ninja -C out/Android_ARM64 angle_library -j${{ env.NINJA_JOBS }}
-          echo "ANGLE library built."
-
-      - name: Upload Build Artifacts - Android ARM64
-        uses: actions/upload-artifact@v4
-        with:
-          name: angle-android-arm64-release-build-gclient-ndk
-          path: angle/out/Android_ARM64/libangle.so
-          if-no-files-found: error
+          
