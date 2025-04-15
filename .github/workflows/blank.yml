@@ -150,7 +150,7 @@ jobs:
       - name: Configure ANGLE Build (GN) - Android ARM64
         working-directory: angle
         run: |
-          gn gen out/Android_ARM64 --args='target_os="android" target_cpu="arm64" android_ndk_api_level=$TARGET_ANDROID_API_LEVEL is_debug=false angle_build_gl=false angle_build_gles=true angle_build_vulkan=true angle_build_d3d=false angle_build_metal=false'
+          gn gen out/Android_ARM64 --args="target_os=\"android\" target_cpu=\"arm64\" android_ndk_api_level=$TARGET_ANDROID_API_LEVEL is_debug=false angle_build_gl=false angle_build_gles=true angle_build_vulkan=true angle_build_d3d=false angle_build_metal=false"
           cat out/Android_ARM64/args.gn
           echo "ANGLE build configuration generated."
 
