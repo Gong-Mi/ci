@@ -18,9 +18,7 @@ jobs:
 
     # 环境变量
     env:
-      # 定义目标 Android API Level，供 envsubst 在模板替换时使用
-      # *** 请根据需要调整此值，确保与你的 args.gn.template 中的预期值匹配 ***
-      TARGET_ANDROID_API_LEVEL: 23 # <-- 示例值，请根据你的模板和需求调整
+      
       # 定义 args.gn 模板文件相对于仓库根目录的路径
       # *** 重要提示：请务必根据你的模板文件实际位置修改此路径！***
       ARGS_TEMPLATE_PATH: "angle_android_arm64.args.gn.template" # <-- *** 修改这里，指向你的模板文件 ***
