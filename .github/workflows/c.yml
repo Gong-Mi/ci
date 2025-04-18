@@ -91,9 +91,9 @@ jobs:
         if: steps.cache-angle-source.outputs.cache-hit != 'true'
         # working-directory: . # (默认在仓库根目录执行)
         run: |
-          echo "缓存未命中或无效。正在运行 gclient sync (这可能需要一些时间)..."
+          echo "缓存未命中或无效。正在运行 gclient sync --no-history(这可能需要一些时间)..."
           # gclient sync 现在会在当前目录下创建/更新 'angle' 目录，并拉取 Android 依赖
-          gclient sync --with_branch_heads --with_tags --force --reset --delete_unversioned_trees -j$(nproc)
+          gclient sync --no-history --with_branch_heads --with_tags --force --reset --delete_unversioned_trees -j$(nproc)
           echo "gclient sync 完成。"
           # *** 验证 ANGLE 源码根文件和 Android 工具链 ***
           echo "检查 .gn 文件是否存在于 'angle' 目录..."
