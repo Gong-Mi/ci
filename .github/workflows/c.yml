@@ -18,7 +18,7 @@ jobs:
       TARGET_ANDROID_API_LEVEL: 23 # 请确保根据需要设置此值
       # 定义 args.gn 模板文件相对于仓库根目录的路径
       # 重要提示：如果你的模板文件位于仓库中的其他位置，请务必修改此路径！
-      ARGS_TEMPLATE_PATH: "path/to/your/angle_android_arm64.args.gn.template" # <-- *** 请务必根据实际情况调整此路径 ***
+      ARGS_TEMPLATE_PATH: "angle_android_arm64.args.gn.template" # <-- *** 请务必根据实际情况调整此路径 ***
 
     steps:
       - name: 检出 CI 仓库 (包含工作流和模板文件)
