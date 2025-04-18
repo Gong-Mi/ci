@@ -1,118 +1,132 @@
+# 工作流名称
 name: 构建 ANGLE - Android ARM64 (使用本地 args.gn 模板)
 
+# 触发条件
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main" ] # 推送到 main 分支时触发
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch: # 允许手动触发工作流
+    branches: [ "main" ] # 向 main 分支发起 Pull Request 时触发
+  workflow_dispatch: # 允许在 GitHub Actions UI 上手动触发
 
 jobs:
   build_angle_android_arm64_local_args:
-    # Job 的显示名称 (可选, 但推荐)
+    # Job 的显示名称
     name: 构建 ANGLE Android ARM64 (本地模板)
-    runs-on: ubuntu-latest # 使用最新的 Ubuntu 运行器
+    # 运行环境
+    runs-on: ubuntu-latest
 
+    # 环境变量，可在此处或步骤中定义
     env:
       # 定义目标 Android API Level，供 envsubst 在模板替换时使用
-      TARGET_ANDROID_API_LEVEL: 23 # 请确保根据需要设置此值
+      TARGET_ANDROID_API_LEVEL: 23 # <-- 请根据需要调整此值
       # 定义 args.gn 模板文件相对于仓库根目录的路径
-      # 重要提示：如果你的模板文件位于仓库中的其他位置，请务必修改此路径！
-      ARGS_TEMPLATE_PATH: "angle_android_arm64.args.gn.template" # <-- *** 请务必根据实际情况调整此路径 ***
+      # *** 重要提示：请务必根据你的模板文件实际位置修改此路径！***
+      ARGS_TEMPLATE_PATH: "angle_android_arm64.args.gn.template" # <-- *** 修改这里 ***
 
     steps:
+      # 步骤 1: 检出包含工作流和模板文件的仓库
       - name: 检出 CI 仓库 (包含工作流和模板文件)
         uses: actions/checkout@v4
         # 此步骤检出包含此工作流文件 (.github/workflows/...) 的仓库
-        # 你的模板文件 (ARGS_TEMPLATE_PATH) 应位于此仓库中
+        # 你的模板文件 (ARGS_TEMPLATE_PATH) 应位于此仓库 ($GITHUB_WORKSPACE) 中
 
       # --- 设置 depot_tools ---
+      # 步骤 2: 缓存 depot_tools 以加速后续运行
       - name: 缓存 depot_tools
         id: cache-depot-tools
         uses: actions/cache@v4
         with:
           path: depot_tools # 缓存 depot_tools 目录
-          key: depot_tools-${{ runner.os }} # depot_tools 的简单缓存键
+          key: depot_tools-${{ runner.os }} # 简单的缓存键
 
+      # 步骤 3: 如果缓存未命中，则克隆 depot_tools
       - name: 如果缓存未命中则克隆 depot_tools
         if: steps.cache-depot-tools.outputs.cache-hit != 'true'
         run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git depot_tools
 
+      # 步骤 4: 将 depot_tools 添加到 PATH 环境变量
       - name: 添加 depot_tools 到 PATH 环境变量
         run: echo "$(pwd)/depot_tools" >> $GITHUB_PATH
-        shell: bash # 显式使用 bash 以确保路径操作的一致性
+        shell: bash
 
       # --- 获取 ANGLE 源码 ---
+      # 步骤 5: 创建 ANGLE 源码的父目录
       - name: 创建 ANGLE 源码目录
         run: mkdir -p angle
 
+      # 步骤 6: 缓存 ANGLE 源码及依赖，以加速后续运行
       - name: 缓存 ANGLE 源码及依赖
         id: cache-angle-source
         uses: actions/cache@v4
         with:
           path: angle # 缓存同步后的整个 angle 目录
           # 使用一个当 gclient sync 可能拉取重大更新时会改变的键
-          # 如果可用，哈希 .gclient 文件或特定的修订标记可能更好
-          key: angle-src-deps-${{ runner.os }}-gclient-${{ github.sha }} # 示例：基于提交 SHA 的键
+          key: angle-src-deps-${{ runner.os }}-gclient-${{ github.sha }} # 基于提交 SHA 的键 (可能会频繁失效)
           restore-keys: |
             angle-src-deps-${{ runner.os }}-gclient- # 恢复键前缀
 
+      # 步骤 7: 配置 gclient (仅在缓存未命中时运行)
       - name: 配置 gclient (如果缓存未命中)
-        # 仅当 ANGLE 源码缓存未命中时运行
         if: steps.cache-angle-source.outputs.cache-hit != 'true'
         working-directory: angle # 在 angle 目录下执行
         run: gclient config https://chromium.googlesource.com/angle/angle.git --unmanaged
 
+      # 步骤 8: 同步 ANGLE 源码和依赖 (gclient sync) (仅在缓存未命中时运行)
       - name: 同步 ANGLE 源码和依赖 (gclient sync) (如果缓存未命中)
-        # 仅当 ANGLE 源码缓存未命中时运行
         if: steps.cache-angle-source.outputs.cache-hit != 'true'
         working-directory: angle # 在 angle 目录下执行
         run: |
-          echo "缓存未命中。正在运行 gclient sync..."
+          echo "缓存未命中或无效。正在运行 gclient sync..."
           # 使用 --reset 确保干净状态, --force 覆盖本地更改
           # --delete_unversioned_trees 删除未受版本控制的文件
+          # -j$(nproc) 使用多核并行同步
           gclient sync --with_branch_heads --with_tags --force --reset --delete_unversioned_trees -j$(nproc)
-          # 基本检查，看 NDK/SDK 是否可能已被获取
-          echo "检查 Android SDK/NDK 目录..."
-          ls -d third_party/android* || echo "在 third_party 中未找到 Android SDK/NDK 目录 (这可能取决于 ANGLE 的设置，不一定是错误)."
+          echo "gclient sync 完成。"
+          echo "检查 Android SDK/NDK 目录 (应由 gclient hooks 下载)..."
+          ls -d third_party/android* || echo "警告：在 third_party 中未找到预期的 Android SDK/NDK 目录。"
         shell: bash
 
       # --- 安装宿主机构建依赖 ---
+      # 步骤 9: 安装构建所需的宿主机依赖包和 envsubst 工具
       - name: 安装宿主机构建依赖和 envsubst 工具
-        # 如果需要系统范围的 sudo，则在工作目录外运行
         run: |
           echo "正在安装宿主机依赖和 gettext (用于 envsubst)..."
           sudo apt-get update -y
           # 安装 gettext 包，它提供了 envsubst 命令行工具
-          sudo apt-get install -y gettext
-          # 如果 ANGLE 的依赖安装脚本存在，则运行它
+          sudo apt-get install -y gettext-base # 通常 gettext-base 就足够了
+          # 尝试运行 ANGLE 的依赖安装脚本 (如果存在)
           if [ -f "angle/build/install-build-deps.py" ]; then
             echo "正在运行 ANGLE 的 install-build-deps.py 脚本..."
-            # 如果需要，可以在 angle 目录上下文中运行，或调整路径
-            # 添加 --android 标志，如果该脚本支持特定于 Android 的依赖安装
+            # 传递 --android 标志以安装 Android 构建所需的依赖
             python3 angle/build/install-build-deps.py --no-prompt --android
           else
-            echo "未找到 angle/build/install-build-deps.py。"
+            echo "未找到 angle/build/install-build-deps.py，跳过此步骤。"
           fi
         shell: bash
 
       # --- 准备和生成构建文件 ---
+      # 步骤 10: 准备 ANGLE 构建输出目录
       - name: 准备 ANGLE 构建输出目录
         run: mkdir -p angle/out/Android_ARM64
         shell: bash
 
+      # 步骤 11: 从仓库中的模板文件准备 args.gn 文件
       - name: 从模板准备 args.gn 文件
-        # 此步骤假定模板文件存在于检出仓库 ($GITHUB_WORKSPACE) 内的 ARGS_TEMPLATE_PATH 处
         run: |
-          echo "正在从模板准备 args.gn 文件: $GITHUB_WORKSPACE/${{ env.ARGS_TEMPLATE_PATH }}"
+          echo "正在从模板准备 args.gn 文件..."
           # 构建模板文件的完整路径 ($GITHUB_WORKSPACE 是仓库被检出的目录)
           TEMPLATE_FILE="$GITHUB_WORKSPACE/${{ env.ARGS_TEMPLATE_PATH }}"
           # 定义输出的 args.gn 文件路径
           OUTPUT_ARGS_FILE="angle/out/Android_ARM64/args.gn"
 
-          # 检查模板文件是否存在
+          echo "模板文件路径: $TEMPLATE_FILE"
+          echo "输出 args.gn 路径: $OUTPUT_ARGS_FILE"
+
+          # 检查模板文件是否存在，不存在则报错退出
           if [ ! -f "$TEMPLATE_FILE" ]; then
-            echo "错误：在 $TEMPLATE_FILE 未找到模板文件！请检查 ARGS_TEMPLATE_PATH 环境变量设置。"
+            echo "错误：在 '$TEMPLATE_FILE' 未找到模板文件！"
+            echo "请确保 ARGS_TEMPLATE_PATH 环境变量指向仓库中存在的模板文件。"
             exit 1 # 终止工作流
           fi
 
@@ -120,46 +134,57 @@ jobs:
           cat "$TEMPLATE_FILE"
           echo "---"
 
-          # 使用 envsubst 将 'env' 块中定义的环境变量 (如 ${TARGET_ANDROID_API_LEVEL})
+          # 使用 envsubst 将 env 块中定义的环境变量 (如 ${TARGET_ANDROID_API_LEVEL})
           # 替换到模板文件中，并将结果写入输出的 args.gn 文件
-          # envsubst 会查找 ${VAR} 或 $VAR 格式的变量进行替换
           envsubst < "$TEMPLATE_FILE" > "$OUTPUT_ARGS_FILE"
 
-          echo "已生成 ${OUTPUT_ARGS_FILE}:"
+          echo "已生成 ${OUTPUT_ARGS_FILE} 内容:"
           cat "$OUTPUT_ARGS_FILE"
           echo "---"
         shell: bash
 
-      - name: 配置 ANGLE 构建 (GN - 使用准备好的 args.gn)
-        working-directory: angle # 在 angle 目录下执行
+      # 步骤 12: 验证源码并配置 ANGLE 构建 (GN)
+      - name: 验证源码并配置 ANGLE 构建 (GN - 使用准备好的 args.gn)
+        working-directory: angle # 切换到 angle 源码根目录执行
         run: |
+          echo "当前工作目录: $(pwd)"
+          echo "检查 ANGLE 源码根目录下的 .gn 文件是否存在..."
+          if [ ! -f ".gn" ]; then
+             echo "错误：在 $(pwd) 中未找到 '.gn' 文件！"
+             echo "这通常表示 ANGLE 源码检出不完整或缓存已损坏。"
+             echo "请检查 'gclient sync' 步骤的日志输出，或尝试清理 GitHub Actions 缓存再运行。"
+             exit 1 # 终止脚本执行
+          fi
+          echo ".gn 文件存在。"
+          echo "---------------------"
+
           echo "正在运行 gn gen..."
           # depot_tools (包含 gn) 应该已经在 PATH 中
           # gn gen 会自动读取位于输出目录 (out/Android_ARM64) 中的 args.gn 文件
-          # 如果 args.gn 已存在于输出目录，则不需要 --args 参数
           gn gen out/Android_ARM64
           echo "GN 生成完成 (使用了从模板生成的 args.gn)。"
         shell: bash
 
       # --- 构建 ANGLE ---
+      # 步骤 13: 使用 Ninja 构建 ANGLE 库
       - name: 构建 ANGLE (Ninja) - Android ARM64
         working-directory: angle # 在 angle 目录下执行
         run: |
           echo "正在运行 ninja 构建..."
-          # depot_tools (包含 ninja) 应该已经在 PATH 中
-          # 构建 'angle_library' 目标 (如果你的目标名称不同，请调整)
+          # 构建 'angle_library' 目标 (如果你的目标名称不同，请修改这里)
           # -C 指定构建目录, -j$(nproc) 使用所有可用的 CPU 核心并行构建
-          ninja -C out/Android_ARM64 angle_library -j$(nproc)
+          ninja -C out/Android_ARM64 angle_library -j$(nproc) # <-- 检查目标名称 'angle_library'
           echo "ANGLE 库构建完成。"
         shell: bash
 
       # --- 上传构建产物 ---
+      # 步骤 14: 将构建生成的库文件作为产物上传
       - name: 上传构建产物 - Android ARM64
         uses: actions/upload-artifact@v4
         with:
           # 上传的产物名称
           name: angle-android-arm64-release-local-args
-          # 需要上传的文件路径 (如果输出库名称或位置不同，请调整)
-          path: angle/out/Android_ARM64/libangle.so
+          # 需要上传的文件路径 (如果输出库名称或位置不同，请修改这里)
+          path: angle/out/Android_ARM64/libangle.so # <-- 检查产物路径和名称 'libangle.so'
           # 如果找不到要上传的文件，则将工作流标记为失败
           if-no-files-found: error
