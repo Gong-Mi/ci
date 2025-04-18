@@ -193,7 +193,7 @@ jobs:
           echo "构建目标: ${BUILD_TARGET}"
           # -C 指定构建目录 (相对于当前工作目录，即 angle/out/Android_ARM64)
           # -j$(nproc) 使用所有可用的 CPU 核心并行构建
-          ninja -C out/Android_ARM64 ${BUILD_TARGET} -j$(nproc)
+          ninja -C out/Android_ARM64  -j$(nproc)
           echo "Ninja 构建过程完成。"
         shell: bash
 
