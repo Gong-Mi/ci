@@ -187,9 +187,7 @@ jobs:
           # *** 重要：确认 'angle_library' 是你想要构建的正确目标 ***
           # 你可以通过 `gn ls out/Android_ARM64` (在 gn gen 成功后) 查看所有可用的构建目标。
           # 常见的 ANGLE 目标可能包括 'angle_static', 'angle_shared', 'libEGL', 'libGLESv2' 等。
-          # 请根据你的 args.gn 配置和需求修改这里的目标名称。
-          BUILD_TARGET="angle_library" # <-- *** 修改这里为你需要的确切目标名称 ***
-
+          
           echo "构建目标: ${BUILD_TARGET}"
           # -C 指定构建目录 (相对于当前工作目录，即 angle/out/Android_ARM64)
           # -j$(nproc) 使用所有可用的 CPU 核心并行构建
