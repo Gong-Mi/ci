@@ -1,0 +1,89 @@
+name: Check SVE Width on All CPU Cores
+
+on: [push, workflow_dispatch]
+
+jobs:
+  check_all_cores:
+    # Use the native Arm64 runner
+    runs-on: ubuntu-latest-arm64
+
+    steps:
+    - name: Checkout code (optional)
+      uses: actions/checkout@v4
+
+    - name: Install Compiler and CPU Utils
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang util-linux # util-linux provides taskset and lscpu
+
+    - name: Create SVE width check C file
+      run: |
+        cat << 'EOF' > sve_width_check.c
+        #include <stdio.h>
+        #include <arm_sve.h>
+        #include <stdint.h>
+
+        int main() {
+            uint64_t bytes_per_vector = svcntb();
+            if (bytes_per_vector == 0) {
+                // Return non-zero on error
+                return 1;
+            }
+            uint64_t bits_per_vector = bytes_per_vector * 8;
+            uint64_t doubles_per_vector = svcntd();
+            // Output format for easy reading in logs
+            printf("WIDTH_BYTES=%llu WIDTH_BITS=%llu DOUBLES=%llu\n",
+                   (unsigned long long)bytes_per_vector,
+                   (unsigned long long)bits_per_vector,
+                   (unsigned long long)doubles_per_vector);
+            return 0;
+        }
+        EOF
+
+    - name: Compile SVE width check program
+      run: clang sve_width_check.c -o sve_width_check -march=armv9-a -lm
+
+    - name: Check SVE width on each CPU core
+      run: |
+        echo "Identifying available CPU cores..."
+        # Get list of online CPUs (e.g., 0,1,2,3), skip header lines
+        cpu_list=$(lscpu -p=CPU | grep -v '^#')
+        if [ -z "$cpu_list" ]; then
+          echo "Error: Could not get CPU list from lscpu."
+          exit 1
+        fi
+        echo "Found CPU cores: $cpu_list"
+        echo "----------------------------------------"
+        all_widths_consistent=true
+        first_width=""
+
+        for core_id in $cpu_list; do
+          echo "Checking Core $core_id..."
+          # Use taskset to bind the command to the specific core
+          # Capture output, handle potential errors from the check program
+          output=$(taskset -c $core_id ./sve_width_check)
+          exit_code=$?
+
+          if [ $exit_code -ne 0 ]; then
+            echo "  Error running check on Core $core_id (Exit Code: $exit_code). SVE might be unavailable or disabled."
+            all_widths_consistent=false # Mark inconsistency on error
+          else
+            echo "  Core $core_id reported: $output"
+            # Extract width for consistency check
+            current_width=$(echo "$output" | grep -o 'WIDTH_BITS=[0-9]*' || echo "")
+            if [ -z "$first_width" ]; then
+              first_width="$current_width"
+            elif [ "$first_width" != "$current_width" ]; then
+              echo "  *** Inconsistency Detected! Core $core_id reports different width ($current_width) from first core ($first_width) ***"
+              all_widths_consistent=false
+            fi
+          fi
+        done
+        echo "----------------------------------------"
+        if $all_widths_consistent && [ -n "$first_width" ] ; then
+           echo "Conclusion: All checked cores consistently report the same SVE width ($first_width)."
+        elif [ -z "$first_width" ]; then
+           echo "Conclusion: Could not determine SVE width from any core."
+        else
+           echo "Conclusion: Inconsistency detected in reported SVE widths across cores."
+        fi
