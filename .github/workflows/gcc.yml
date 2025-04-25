@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest # 必须使用 Linux 运行环境
-    env: # 定义 Job 级别的环境变量，供所有步骤共享
+    env: # 定义 Job 级别的环境变量,供所有步骤共享
       GCC_VERSION: "12.2.0"
       BINUTILS_VERSION: "2.39"
       GMP_VERSION: "6.2.1"
@@ -16,7 +16,7 @@ jobs:
       MPC_VERSION: "1.2.1"
       NDK_VERSION: "android-ndk-r25c" # NDK 版本
       TARGET_ARCH: "aarch64"          # 目标架构
-      API_LEVEL: "33"                 # Android API Level
+      API_LEVEL: "30"                 # Android API Level (可以根据需要调高)
 
     steps:
     - name: 检出代码 (如果你的仓库包含辅助脚本/配置)
@@ -90,7 +90,7 @@ jobs:
         wget -q https://ftp.gnu.org/gnu/gmp/gmp-${GMP_VERSION}.tar.xz
         wget -q https://ftp.gnu.org/gnu/mpfr/mpfr-${MPFR_VERSION}.tar.xz
         wget -q https://ftp.gnu.org/gnu/mpc/mpc-${MPC_VERSION}.tar.gz
-        echo "下载完成，正在解压..."
+        echo "下载完成,正在解压..."
         tar -xf gcc-${GCC_VERSION}.tar.gz
         tar -xf binutils-${BINUTILS_VERSION}.tar.gz
         tar -xf gmp-${GMP_VERSION}.tar.xz
@@ -115,7 +115,7 @@ jobs:
         # --- 构建 Binutils ---
         echo "构建 Binutils (版本: ${BINUTILS_VERSION})..."
         cd binutils-${BINUTILS_VERSION}
-        # 导出变量，使用 llvm-* 工具名
+        # 导出变量,使用 llvm-* 工具名
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
@@ -136,6 +136,7 @@ jobs:
                     --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
                     --disable-nls --disable-werror \
                     --disable-static --enable-shared # 动态链接
+                    # --disable-gprofng # <--- 如果遇到之前的 pthreads 错误，取消此行注释
 
         echo "运行 Binutils configure 完成。开始 make..."
         make -j${NPROC} || { echo "Binutils make failed"; exit 1; }
@@ -228,7 +229,7 @@ jobs:
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.* || echo "Warning: MPC library might not be installed correctly."
         # --------------------
 
-        # 添加安装路径到全局环境，供后续步骤（如构建 GCC）使用
+        # 添加安装路径到全局环境,供后续步骤(如构建 GCC)使用
         echo "Adding ${INSTALL_PREFIX}/bin to PATH for subsequent steps"
         echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
         # 设置 LD_LIBRARY_PATH 指向安装的库目录 (may not be strictly needed for build, but good practice)
@@ -345,7 +346,7 @@ jobs:
         # 复制 GCC 内部工具 (critical)
         copy_dir_or_fail ${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/. ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/
 
-        # 复制动态库 (必需，因为我们是动态链接)
+        # 复制动态库 (必需,因为我们是动态链接)
         # Use find to handle version suffixes gracefully
         find ${INSTALL_PREFIX}/${LIB_DIR_NAME}/ -maxdepth 1 -name 'libstdc++.so*' -exec cp -fv {} ${MODULE_DIR}/system/${LIB_DIR_NAME}/ \;
         find ${INSTALL_PREFIX}/${LIB_DIR_NAME}/ -maxdepth 1 -name 'libgcc_s.so*' -exec cp -fv {} ${MODULE_DIR}/system/${LIB_DIR_NAME}/ \;
