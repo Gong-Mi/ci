@@ -1,0 +1,209 @@
+name: 构建 GCC Magisk 模块
+
+on:
+  push: # 或者 workflow_dispatch, schedule 等触发方式
+    branches: [ main ] # 或者你的开发分支
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest # 必须使用 Linux 运行环境
+
+    steps:
+    - name: 检出代码 (如果你的仓库包含辅助脚本/配置)
+      uses: actions/checkout@v3
+
+    - name: 安装基础依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential wget unzip bc # 基础构建工具
+
+    - name: 设置 Android NDK
+      id: setup-ndk
+      # 选择一个可靠的 NDK 版本 (例如 r23c, r25c, r26b - 检查兼容性)
+      # 这一步涉及下载并解压 NDK
+      run: |
+        NDK_VERSION="android-ndk-r25c" # 示例 NDK 版本
+        echo "正在下载 NDK $NDK_VERSION..."
+        wget -q https://dl.google.com/android/repository/${NDK_VERSION}-linux.zip
+        unzip -q ${NDK_VERSION}-linux.zip
+        # 将 NDK 路径添加到环境变量，供后续步骤使用
+        echo "ANDROID_NDK_HOME=${GITHUB_WORKSPACE}/${NDK_VERSION}" >> $GITHUB_ENV
+        echo "NDK 路径: ${GITHUB_WORKSPACE}/${NDK_VERSION}"
+
+    - name: 定义构建变量
+      id: build-vars
+      run: |
+        # 目标架构 (例如 arm64)
+        TARGET_ARCH="aarch64"
+        # Android API Level (必须是 NDK 支持的, 例如 21 对应 Android 5.0+)
+        API_LEVEL="21"
+        # 对应的 Android Target Triple
+        TARGET_TRIPLE="${TARGET_ARCH}-linux-android"
+        # 包含 API Level 的完整工具链目标
+        TOOLCHAIN_TARGET="${TARGET_TRIPLE}${API_LEVEL}"
+        # 临时安装目录的前缀
+        INSTALL_PREFIX="${GITHUB_WORKSPACE}/install_dir"
+        # Magisk 模块目录
+        MODULE_DIR="${GITHUB_WORKSPACE}/gcc_magisk_module"
+
+        echo "TARGET_TRIPLE=${TARGET_TRIPLE}" >> $GITHUB_ENV
+        echo "TOOLCHAIN_TARGET=${TOOLCHAIN_TARGET}" >> $GITHUB_ENV
+        echo "INSTALL_PREFIX=${INSTALL_PREFIX}" >> $GITHUB_ENV
+        echo "MODULE_DIR=${MODULE_DIR}" >> $GITHUB_ENV
+        # 将 NDK 工具链添加到 PATH 环境变量
+        echo "PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}" >> $GITHUB_ENV
+
+        mkdir -p $INSTALL_PREFIX
+        mkdir -p $MODULE_DIR
+
+    - name: 下载源代码 (GCC, Binutils, GMP, MPFR, MPC)
+      run: |
+        # 定义稳定版本 (示例)
+        GCC_VERSION="12.2.0"
+        BINUTILS_VERSION="2.39"
+        GMP_VERSION="6.2.1"
+        MPFR_VERSION="4.1.0"
+        MPC_VERSION="1.2.1"
+
+        wget -q https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.gz
+        wget -q https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.gz
+        wget -q https://ftp.gnu.org/gnu/gmp/gmp-${GMP_VERSION}.tar.xz
+        wget -q https://ftp.gnu.org/gnu/mpfr/mpfr-${MPFR_VERSION}.tar.xz
+        wget -q https://ftp.gnu.org/gnu/mpc/mpc-${MPC_VERSION}.tar.gz
+
+        tar -xf gcc-${GCC_VERSION}.tar.gz
+        tar -xf binutils-${BINUTILS_VERSION}.tar.gz
+        tar -xf gmp-${GMP_VERSION}.tar.xz
+        tar -xf mpfr-${MPFR_VERSION}.tar.xz
+        tar -xf mpc-${MPC_VERSION}.tar.gz
+
+    - name: 构建依赖项 (Binutils, GMP, MPFR, MPC)
+      # 注意：这只是一个简化视图。每个库都需要特定的 ./configure 配置！
+      # 关键在于，必须使用 NDK 工具链为 Android 进行交叉编译配置。
+      run: |
+        # --- 构建 Binutils ---
+        cd binutils-${BINUTILS_VERSION}
+        # 示例 configure (需要仔细调整！)
+        CC=${TOOLCHAIN_TARGET}-clang \
+        CXX=${TOOLCHAIN_TARGET}-clang++ \
+        AR=${TARGET_TRIPLE}-ar \
+        RANLIB=${TARGET_TRIPLE}-ranlib \
+        STRIP=${TARGET_TRIPLE}-strip \
+        ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
+                    --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
+                    --disable-nls --disable-werror
+        make -j$(nproc)
+        make install
+        cd ..
+
+        # --- 构建 GMP --- (需要类似的 configure 配置)
+        cd gmp-${GMP_VERSION}
+        # ./configure ... (需要 --host=${TARGET_TRIPLE}, --prefix=${INSTALL_PREFIX}, 指定 NDK 的 CC 等)
+        # make -j$(nproc) && make install
+        cd ..
+
+        # --- 构建 MPFR --- (类似, 需要 --with-gmp=${INSTALL_PREFIX})
+        cd mpfr-${MPFR_VERSION}
+        # ./configure ... (--host=${TARGET_TRIPLE}, --prefix=${INSTALL_PREFIX}, --with-gmp=${INSTALL_PREFIX})
+        # make -j$(nproc) && make install
+        cd ..
+
+        # --- 构建 MPC --- (类似, 需要 --with-gmp=${INSTALL_PREFIX}, --with-mpfr=${INSTALL_PREFIX})
+        cd mpc-${MPC_VERSION}
+        # ./configure ... (--host=${TARGET_TRIPLE}, --prefix=${INSTALL_PREFIX}, --with-gmp=${INSTALL_PREFIX}, --with-mpfr=${INSTALL_PREFIX})
+        # make -j$(nproc) && make install
+        cd ..
+
+        # 确保编译好的依赖项在 PATH 中，以便 GCC 构建时能找到
+        echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
+
+    - name: 构建 GCC
+      # 这是最复杂的部分。GCC 构建通常是多阶段的。
+      run: |
+        cd gcc-${GCC_VERSION}
+        # 非常简化的 configure 示例 (需要添加更多选项并调试)
+        CC=${TOOLCHAIN_TARGET}-clang \
+        CXX=${TOOLCHAIN_TARGET}-clang++ \
+        AR=${TARGET_TRIPLE}-ar \
+        RANLIB=${TARGET_TRIPLE}-ranlib \
+        STRIP=${TARGET_TRIPLE}-strip \
+        ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
+                    --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
+                    --with-gmp=${INSTALL_PREFIX} \
+                    --with-mpfr=${INSTALL_PREFIX} \
+                    --with-mpc=${INSTALL_PREFIX} \
+                    --with-binutils=${INSTALL_PREFIX}/bin \
+                    --enable-languages=c,c++ \ # 限制编译的语言，减少时间和体积
+                    --disable-nls \
+                    --disable-libssp \
+                    --disable-libgomp \
+                    --disable-libquadmath \
+                    --enable-static \ # 尝试静态链接 (非常难完全搞定)
+                    # --disable-shared # 与静态链接配合使用
+                    # 根据遇到的错误，可能需要添加许多其他编译选项
+        make -j$(nproc) # 这会花费非常非常长的时间
+        make install
+        cd ..
+
+    - name: 创建 Magisk 模块结构
+      run: |
+        MODULE_ID="gcc-cross-android"
+        MODULE_NAME="GCC for Android (交叉编译)"
+        MODULE_VERSION="v${GCC_VERSION}" # 示例版本号
+        MODULE_AUTHOR="你的名字"
+
+        # 创建目录结构
+        mkdir -p ${MODULE_DIR}/system/bin
+        mkdir -p ${MODULE_DIR}/system/lib64 # 如果需要32位则调整为 lib
+        mkdir -p ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION} # GCC 内部可执行文件路径
+        mkdir -p ${MODULE_DIR}/META-INF/com/google/android
+
+        # 复制二进制文件 (根据实际安装布局调整路径)
+        cp ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc ${MODULE_DIR}/system/bin/gcc
+        cp ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-g++ ${MODULE_DIR}/system/bin/g++
+        cp ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-cpp ${MODULE_DIR}/system/bin/cpp
+        # 是否也复制 binutils (as, ld)？或者假设系统/其他Magisk模块提供？这里选择复制我们自己编译的
+        cp ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as ${MODULE_DIR}/system/bin/as
+        cp ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld ${MODULE_DIR}/system/bin/ld
+        # 如果需要，复制其他必要的工具
+
+        # 复制库文件 (如果动态链接 - 尝试静态链接可能避免这一步)
+        # cp ${INSTALL_PREFIX}/lib64/libstdc++.so* ${MODULE_DIR}/system/lib64/
+        # cp ${INSTALL_PREFIX}/lib64/libgcc_s.so* ${MODULE_DIR}/system/lib64/
+        # 如果需要，复制 GMP, MPFR, MPC 的 .so 文件
+
+        # 复制 GCC 内部文件
+        cp -r ${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/* ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/
+
+        # 创建 module.prop 文件
+        echo "id=${MODULE_ID}" > ${MODULE_DIR}/module.prop
+        echo "name=${MODULE_NAME}" >> ${MODULE_DIR}/module.prop
+        echo "version=${MODULE_VERSION}" >> ${MODULE_DIR}/module.prop
+        echo "versionCode=$(echo $GCC_VERSION | tr -d . )0" >> ${MODULE_DIR}/module.prop # 简单的版本代码
+        echo "author=${MODULE_AUTHOR}" >> ${MODULE_DIR}/module.prop
+        echo "description=为 Android ${TARGET_ARCH} 交叉编译的 GCC ${GCC_VERSION}" >> ${MODULE_DIR}/module.prop
+
+        # 创建空的 update-binary 和 updater-script (如果需要更复杂逻辑则修改)
+        echo '#!/sbin/sh' > ${MODULE_DIR}/META-INF/com/google/android/update-binary
+        echo '# 安装脚本' >> ${MODULE_DIR}/META-INF/com/google/android/update-binary
+        echo 'ui_print("正在安装 ${MODULE_NAME}")' >> ${MODULE_DIR}/META-INF/com/google/android/update-binary
+        echo 'exit 0' >> ${MODULE_DIR}/META-INF/com/google/android/update-binary
+        chmod 755 ${MODULE_DIR}/META-INF/com/google/android/update-binary
+        touch ${MODULE_DIR}/META-INF/com/google/android/updater-script # 简单模块通常为空
+
+        # (可选) 如果需要设置权限等，添加 customize.sh
+        # echo '#!/system/bin/sh' > ${MODULE_DIR}/customize.sh
+        # echo 'set_perm_recursive $MODPATH/system/bin 0 0 0755 0755' >> ${MODULE_DIR}/customize.sh
+
+    - name: 打包模块为 Zip 文件
+      run: |
+        cd ${MODULE_DIR}
+        zip -r9 ${GITHUB_WORKSPACE}/gcc-magisk-module-${TARGET_ARCH}.zip .
+        cd ${GITHUB_WORKSPACE}
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v3
+      with:
+        name: gcc-magisk-module-${{ env.TARGET_ARCH }} # 构建产物名称
+        path: ${{ github.workspace }}/gcc-magisk-module-${{ env.TARGET_ARCH }}.zip # 要上传的文件路径
