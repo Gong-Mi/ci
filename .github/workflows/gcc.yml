@@ -292,6 +292,7 @@ jobs:
                     --disable-libquadmath \
                     --disable-libsanitizer \
                     --disable-libatomic \
+                    --disable-gprofng \
                     --disable-bootstrap \ # Keep disabled for faster CI runs, enable if correctness issues appear
                     --disable-multilib \ # Android 通常不需要
                     --disable-static --enable-shared # 动态链接
