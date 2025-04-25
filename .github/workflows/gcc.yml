@@ -14,7 +14,7 @@ jobs:
       GMP_VERSION: "6.2.1"
       MPFR_VERSION: "4.1.0"
       MPC_VERSION: "1.2.1"
-      NDK_VERSION: "android-ndk-r27c" # NDK 版本 - 更新以匹配日志
+      NDK_VERSION: "android-ndk-r27c" # NDK 版本 - 已更新
       TARGET_ARCH: "aarch64"          # 目标架构
       API_LEVEL: "30"                 # Android API Level (可以根据需要调高)
 
@@ -104,7 +104,6 @@ jobs:
       # 在脚本内部更新 PATH, 使用 llvm-* 工具名导出变量
       run: |
         echo "开始构建依赖项..."
-        # PATH should already include NDK bin from previous step via GITHUB_ENV
         echo "Current PATH for dependency build: $PATH"
         echo "Current work dir: $(pwd)"
         ls -l # 确认源码目录存在
@@ -112,7 +111,6 @@ jobs:
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
 
-        # --- 构建 Binutils ---
         echo "构建 Binutils (版本: ${BINUTILS_VERSION})..."
         cd binutils-${BINUTILS_VERSION}
         # 导出变量,使用 llvm-* 工具名
@@ -121,14 +119,13 @@ jobs:
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
         export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-        # --- 添加检查 ---
+        # 添加检查
         echo "Checking tools for Binutils:"
         echo "CC is: $CC"
         $CC --version || { echo "CC check failed"; exit 1; }
         echo "AR is: $AR"
         ls -l "$AR"
         "$AR" --version || { echo "AR version check failed"; exit 1; }
-        # ---------------
 
         # 执行 configure
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
@@ -144,12 +141,10 @@ jobs:
         make install || { echo "Binutils make install failed"; exit 1; }
         echo "Binutils 构建和安装完成。"
         cd ..
-        # --- 检查安装结果 ---
+        # 检查安装结果
         echo "Checking Binutils installation in ${INSTALL_PREFIX}/bin:"
         ls -l ${INSTALL_PREFIX}/bin | grep ${TARGET_TRIPLE} || echo "Warning: Binutils tools might not be installed correctly."
-        # --------------------
 
-        # --- 构建 GMP ---
         echo "构建 GMP (版本: ${GMP_VERSION})..."
         cd gmp-${GMP_VERSION}
         # 导出变量 (reuse from above, but be explicit if needed)
@@ -169,13 +164,11 @@ jobs:
         make install || { echo "GMP make install failed"; exit 1; }
         echo "GMP 构建和安装完成。"
         cd ..
-        # --- 检查安装结果 ---
+        # 检查安装结果
         echo "Checking GMP installation in ${INSTALL_PREFIX}/include and ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
         ls -l ${INSTALL_PREFIX}/include/gmp*.h || echo "Warning: GMP headers might not be installed correctly."
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgmp.* || echo "Warning: GMP library might not be installed correctly."
-        # --------------------
 
-        # --- 构建 MPFR ---
         echo "构建 MPFR (版本: ${MPFR_VERSION})..."
         cd mpfr-${MPFR_VERSION}
         # 导出变量
@@ -196,13 +189,11 @@ jobs:
         make install || { echo "MPFR make install failed"; exit 1; }
         echo "MPFR 构建和安装完成。"
         cd ..
-        # --- 检查安装结果 ---
+        # 检查安装结果
         echo "Checking MPFR installation in ${INSTALL_PREFIX}/include and ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
         ls -l ${INSTALL_PREFIX}/include/mpfr.h || echo "Warning: MPFR header might not be installed correctly."
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpfr.* || echo "Warning: MPFR library might not be installed correctly."
-        # --------------------
 
-        # --- 构建 MPC ---
         echo "构建 MPC (版本: ${MPC_VERSION})..."
         cd mpc-${MPC_VERSION}
         # 导出变量
@@ -224,11 +215,10 @@ jobs:
         make install || { echo "MPC make install failed"; exit 1; }
         echo "MPC 构建和安装完成。"
         cd ..
-        # --- 检查安装结果 ---
+        # 检查安装结果
         echo "Checking MPC installation in ${INSTALL_PREFIX}/include and ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
         ls -l ${INSTALL_PREFIX}/include/mpc.h || echo "Warning: MPC header might not be installed correctly."
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.* || echo "Warning: MPC library might not be installed correctly."
-        # --------------------
 
         # 添加安装路径到全局环境,供后续步骤(如构建 GCC)使用
         echo "Adding ${INSTALL_PREFIX}/bin to PATH for subsequent steps"
@@ -265,14 +255,13 @@ jobs:
         # export LDFLAGS="${LDFLAGS} --sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
         echo "CPPFLAGS for GCC: $CPPFLAGS"
         echo "LDFLAGS for GCC: $LDFLAGS"
-        # --- 添加检查 ---
+        # 添加检查
         echo "Checking tools for GCC:"
         echo "CC is: $CC"
         $CC --version || { echo "CC check failed"; exit 1; }
         echo "NM is: $NM"
         ls -l "$NM"
         "$NM" --version || { echo "NM version check failed"; exit 1; }
-        # ---------------
 
         # 执行 configure (这部分参数仍然需要根据实际错误进行大量调试)
         # 注意: --with-gmp, --with-mpfr, --with-mpc 依赖于依赖项的 make install 被执行
@@ -304,10 +293,9 @@ jobs:
         make install || { echo "GCC make install failed"; exit 1; }
         echo "GCC 构建和安装完成。"
         cd ..
-        # --- 检查安装结果 ---
+        # 检查安装结果
         echo "Checking GCC installation in ${INSTALL_PREFIX}/bin:"
         ls -l ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc || echo "Warning: GCC compiler might not be installed correctly."
-        # --------------------
 
     - name: 创建 Magisk 模块结构
       run: |
