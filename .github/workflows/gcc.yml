@@ -14,7 +14,7 @@ jobs:
       GMP_VERSION: "6.2.1"
       MPFR_VERSION: "4.1.0"
       MPC_VERSION: "1.2.1"
-      NDK_VERSION: "android-ndk-r25c" # NDK 版本
+      NDK_VERSION: "android-ndk-r27c" # NDK 版本
       TARGET_ARCH: "aarch64"          # 目标架构
       API_LEVEL: "30"                 # Android API Level (可以根据需要调高)
 
