@@ -101,25 +101,27 @@ jobs:
         ls -l # 列出文件以确认解压成功
 
     - name: 构建依赖项 (Binutils, GMP, MPFR, MPC)
-      # 在脚本内部更新 PATH, 使用 llvm-* 工具名导出变量
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         echo "开始构建依赖项..."
         echo "Current PATH for dependency build: $PATH"
         echo "Current work dir: $(pwd)"
-        ls -l # 确认源码目录存在
+        ls -l
 
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
 
         echo "构建 Binutils (版本: ${BINUTILS_VERSION})..."
         cd binutils-${BINUTILS_VERSION}
-        # 导出变量,使用 llvm-* 工具名
+
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
         export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-        # 添加检查
+
         echo "Checking tools for Binutils:"
         echo "CC is: $CC"
         $CC --version || { echo "CC check failed"; exit 1; }
@@ -127,111 +129,102 @@ jobs:
         ls -l "$AR"
         "$AR" --version || { echo "AR version check failed"; exit 1; }
 
-        # 执行 configure
+        echo "--- Preparing to configure Binutils ---"
+        echo "PWD=$(pwd)"
+        ls -l ./configure # Check if configure script exists and is executable
+        if [ ! -x ./configure ]; then
+           echo "错误: configure脚本不存在或不可执行！"
+           exit 1
+        fi
+        echo "Configure command about to run."
+
+        # Execute configure (Ensure no strange characters before './configure')
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
                     --host=${TARGET_TRIPLE} \
                     --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
                     --disable-nls --disable-werror \
-                    --disable-libctf \ # <--- 添加此标志以禁用 libctf
-                    --disable-static --enable-shared # 动态链接
-                    # --disable-gprofng # <--- 如果遇到之前的 pthreads 错误，取消此行注释
+                    --disable-libctf \
+                    --disable-static --enable-shared \
+                     # --disable-gprofng # Optional, keep commented if not needed
 
         echo "运行 Binutils configure 完成。开始 make..."
         make -j${NPROC} || { echo "Binutils make failed"; exit 1; }
         make install || { echo "Binutils make install failed"; exit 1; }
         echo "Binutils 构建和安装完成。"
         cd ..
-        # 检查安装结果
         echo "Checking Binutils installation in ${INSTALL_PREFIX}/bin:"
         ls -l ${INSTALL_PREFIX}/bin | grep ${TARGET_TRIPLE} || echo "Warning: Binutils tools might not be installed correctly."
 
         echo "构建 GMP (版本: ${GMP_VERSION})..."
         cd gmp-${GMP_VERSION}
-        # 导出变量 (reuse from above, but be explicit if needed)
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
         export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-
-        # 执行 configure
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
                      --enable-cxx \
-                     --disable-static --enable-shared # 动态链接
-
+                     --disable-static --enable-shared
         echo "运行 GMP configure 完成。开始 make..."
         make -j${NPROC} || { echo "GMP make failed"; exit 1; }
         make install || { echo "GMP make install failed"; exit 1; }
         echo "GMP 构建和安装完成。"
         cd ..
-        # 检查安装结果
         echo "Checking GMP installation in ${INSTALL_PREFIX}/include and ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
         ls -l ${INSTALL_PREFIX}/include/gmp*.h || echo "Warning: GMP headers might not be installed correctly."
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgmp.* || echo "Warning: GMP library might not be installed correctly."
 
         echo "构建 MPFR (版本: ${MPFR_VERSION})..."
         cd mpfr-${MPFR_VERSION}
-        # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
         export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-
-        # 执行 configure
-        # 注意: --with-gmp 依赖于上一步 GMP 的 make install 被执行
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
                     --with-gmp=${INSTALL_PREFIX} \
-                    --disable-static --enable-shared # 动态链接
-
+                    --disable-static --enable-shared
         echo "运行 MPFR configure 完成。开始 make..."
         make -j${NPROC} || { echo "MPFR make failed"; exit 1; }
         make install || { echo "MPFR make install failed"; exit 1; }
         echo "MPFR 构建和安装完成。"
         cd ..
-        # 检查安装结果
         echo "Checking MPFR installation in ${INSTALL_PREFIX}/include and ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
         ls -l ${INSTALL_PREFIX}/include/mpfr.h || echo "Warning: MPFR header might not be installed correctly."
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpfr.* || echo "Warning: MPFR library might not be installed correctly."
 
         echo "构建 MPC (版本: ${MPC_VERSION})..."
         cd mpc-${MPC_VERSION}
-        # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
         export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-
-        # 执行 configure
-        # 注意: --with-gmp 和 --with-mpfr 依赖于前两步的 make install 被执行
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
                     --with-gmp=${INSTALL_PREFIX} \
                     --with-mpfr=${INSTALL_PREFIX} \
-                    --disable-static --enable-shared # 动态链接
-
+                    --disable-static --enable-shared
         echo "运行 MPC configure 完成。开始 make..."
         make -j${NPROC} || { echo "MPC make failed"; exit 1; }
         make install || { echo "MPC make install failed"; exit 1; }
         echo "MPC 构建和安装完成。"
         cd ..
-        # 检查安装结果
         echo "Checking MPC installation in ${INSTALL_PREFIX}/include and ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
         ls -l ${INSTALL_PREFIX}/include/mpc.h || echo "Warning: MPC header might not be installed correctly."
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.* || echo "Warning: MPC library might not be installed correctly."
 
-        # 添加安装路径到全局环境,供后续步骤(如构建 GCC)使用
         echo "Adding ${INSTALL_PREFIX}/bin to PATH for subsequent steps"
         echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
-        # 设置 LD_LIBRARY_PATH 指向安装的库目录 (may not be strictly needed for build, but good practice)
         echo "Adding ${INSTALL_PREFIX}/${LIB_DIR_NAME} to LD_LIBRARY_PATH for subsequent steps"
         echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
         echo "依赖项构建步骤完成。"
 
     - name: 构建 GCC
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         echo "开始构建 GCC (版本: ${GCC_VERSION})..."
-        # PATH and LD_LIBRARY_PATH should be set correctly via GITHUB_ENV from previous steps
         echo "Current PATH for GCC build: $PATH"
         echo "Current LD_LIBRARY_PATH for GCC build: $LD_LIBRARY_PATH"
         cd gcc-${GCC_VERSION}
@@ -239,23 +232,18 @@ jobs:
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
 
-        # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
         export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-        # NM 工具可能也需要指定
         export NM="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
-        # LDFLAGS 指向安装的库目录
         export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME}"
-        # CPPFLAGS 指向安装的头文件目录
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
-        # Linker might need explicit sysroot for runtime libs? Add if needed.
-        # export LDFLAGS="${LDFLAGS} --sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+        # export LDFLAGS="${LDFLAGS} --sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot" # Add if needed
+
         echo "CPPFLAGS for GCC: $CPPFLAGS"
         echo "LDFLAGS for GCC: $LDFLAGS"
-        # 添加检查
         echo "Checking tools for GCC:"
         echo "CC is: $CC"
         $CC --version || { echo "CC check failed"; exit 1; }
@@ -263,9 +251,15 @@ jobs:
         ls -l "$NM"
         "$NM" --version || { echo "NM version check failed"; exit 1; }
 
-        # 执行 configure (这部分参数仍然需要根据实际错误进行大量调试)
-        # 注意: --with-gmp, --with-mpfr, --with-mpc 依赖于依赖项的 make install 被执行
-        # Added --with-as and --with-ld explicitly pointing to binutils install
+        echo "--- Preparing to configure GCC ---"
+        echo "PWD=$(pwd)"
+        ls -l ./configure # Check if configure script exists and is executable
+        if [ ! -x ./configure ]; then
+           echo "错误: configure脚本不存在或不可执行！"
+           exit 1
+        fi
+        echo "Configure command about to run."
+
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
                     --host=${TARGET_TRIPLE} \
                     --build=$(./config.guess) \
@@ -283,36 +277,36 @@ jobs:
                     --disable-libsanitizer \
                     --disable-libatomic \
                     --disable-gprofng \
-                    --disable-bootstrap \ # Keep disabled for faster CI runs, enable if correctness issues appear
-                    --disable-multilib \ # Android 通常不需要
-                    --disable-static --enable-shared # 动态链接
+                    --disable-bootstrap \
+                    --disable-multilib \
+                    --disable-static --enable-shared
 
         echo "运行 GCC configure 完成。开始 make..."
-        # GCC make can take a very long time!
         make -j${NPROC} || { echo "GCC make failed"; exit 1; }
         make install || { echo "GCC make install failed"; exit 1; }
         echo "GCC 构建和安装完成。"
         cd ..
-        # 检查安装结果
         echo "Checking GCC installation in ${INSTALL_PREFIX}/bin:"
         ls -l ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc || echo "Warning: GCC compiler might not be installed correctly."
 
     - name: 创建 Magisk 模块结构
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         echo "创建 Magisk 模块结构..."
         MODULE_ID="gcc-cross-android-${TARGET_ARCH}"
         MODULE_NAME="GCC for Android (${TARGET_ARCH})"
         MODULE_VERSION="v${GCC_VERSION}"
-        MODULE_AUTHOR="GitHub Actions CI" # 或者你的名字
+        MODULE_AUTHOR="GitHub Actions CI"
 
         # 创建目录结构
         mkdir -p ${MODULE_DIR}/system/bin
-        mkdir -p ${MODULE_DIR}/system/${LIB_DIR_NAME} # 使用之前确定的库目录名
+        mkdir -p ${MODULE_DIR}/system/${LIB_DIR_NAME}
         mkdir -p ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}
         mkdir -p ${MODULE_DIR}/META-INF/com/google/android
 
         echo "复制已安装的文件到模块目录..."
-        # Fail if essential files are missing after build
         copy_or_fail() {
             echo "Copying: $1 -> $2"
             cp -fv "$1" "$2" || { echo "错误: 无法复制 '$1' 到 '$2'. 安装步骤可能失败。"; exit 1; }
@@ -326,25 +320,21 @@ jobs:
         copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc ${MODULE_DIR}/system/bin/gcc
         copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-g++ ${MODULE_DIR}/system/bin/g++
         copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-cpp ${MODULE_DIR}/system/bin/cpp
-        # 复制 Binutils 工具 (通常需要)
+        # 复制 Binutils 工具
         copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as ${MODULE_DIR}/system/bin/as
         copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld ${MODULE_DIR}/system/bin/ld
-        # Add other binutils if needed (ar, ranlib, strip, objdump etc.)
-        # copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ar ${MODULE_DIR}/system/bin/ar
-        # copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ranlib ${MODULE_DIR}/system/bin/ranlib
 
-        # 复制 GCC 内部工具 (critical)
+        # 复制 GCC 内部工具
         copy_dir_or_fail ${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/. ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/
 
-        # 复制动态库 (必需,因为我们是动态链接)
-        # Use find to handle version suffixes gracefully
+        # 复制动态库
         find ${INSTALL_PREFIX}/${LIB_DIR_NAME}/ -maxdepth 1 -name 'libstdc++.so*' -exec cp -fv {} ${MODULE_DIR}/system/${LIB_DIR_NAME}/ \;
         find ${INSTALL_PREFIX}/${LIB_DIR_NAME}/ -maxdepth 1 -name 'libgcc_s.so*' -exec cp -fv {} ${MODULE_DIR}/system/${LIB_DIR_NAME}/ \;
         find ${INSTALL_PREFIX}/${LIB_DIR_NAME}/ -maxdepth 1 -name 'libgmp.so*' -exec cp -fv {} ${MODULE_DIR}/system/${LIB_DIR_NAME}/ \;
         find ${INSTALL_PREFIX}/${LIB_DIR_NAME}/ -maxdepth 1 -name 'libmpfr.so*' -exec cp -fv {} ${MODULE_DIR}/system/${LIB_DIR_NAME}/ \;
         find ${INSTALL_PREFIX}/${LIB_DIR_NAME}/ -maxdepth 1 -name 'libmpc.so*' -exec cp -fv {} ${MODULE_DIR}/system/${LIB_DIR_NAME}/ \;
 
-        # Verify at least some libs were copied
+        # Verify libs were copied
         if [ -z "$(ls -A ${MODULE_DIR}/system/${LIB_DIR_NAME})" ]; then
            echo "错误: 未能复制任何共享库到 ${MODULE_DIR}/system/${LIB_DIR_NAME}"
            exit 1
@@ -355,7 +345,6 @@ jobs:
         echo "id=${MODULE_ID}" > ${MODULE_DIR}/module.prop
         echo "name=${MODULE_NAME}" >> ${MODULE_DIR}/module.prop
         echo "version=${MODULE_VERSION}" >> ${MODULE_DIR}/module.prop
-        # Generate a simple numeric version code (e.g., 1220 for 12.2.0)
         safe_version_code=$(echo $GCC_VERSION | tr -d '.' | cut -c -4)0
         echo "versionCode=${safe_version_code}" >> ${MODULE_DIR}/module.prop
         echo "author=${MODULE_AUTHOR}" >> ${MODULE_DIR}/module.prop
@@ -374,14 +363,16 @@ jobs:
         echo 'ui_print("- 文件将被安装到 /system")' >> ${MODULE_DIR}/META-INF/com/google/android/update-binary
         echo 'exit 0' >> ${MODULE_DIR}/META-INF/com/google/android/update-binary
         chmod 755 ${MODULE_DIR}/META-INF/com/google/android/update-binary
-        # updater-script is typically empty for simple Magisk modules
-        touch ${MODULE_DIR}/META-INF/com/google/android/updater-script
+        touch ${MODULE_DIR}/META-INF/com/google/android/updater-script # Typically empty
         echo "模块结构创建完成。"
         echo "模块内容概览:"
         ls -R ${MODULE_DIR}
 
     - name: 打包模块为 Zip 文件
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         echo "开始打包 Zip 文件..."
         cd ${MODULE_DIR}
         zip -r9 ${GITHUB_WORKSPACE}/gcc-magisk-module-${TARGET_ARCH}.zip .
