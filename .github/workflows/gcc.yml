@@ -24,6 +24,9 @@ jobs:
 
     - name: 安装基础依赖
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         sudo apt-get update
         sudo apt-get install -y build-essential wget unzip bc tar xz-utils texinfo # texinfo is often needed for make install
         echo "基础依赖安装完成。"
@@ -31,6 +34,9 @@ jobs:
     - name: 设置 Android NDK
       id: setup-ndk
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         echo "正在下载 NDK ${NDK_VERSION}..." # 使用 env 中定义的 NDK_VERSION
         wget -q https://dl.google.com/android/repository/${NDK_VERSION}-linux.zip
         unzip -q ${NDK_VERSION}-linux.zip
@@ -41,6 +47,9 @@ jobs:
     - name: 定义构建特定变量
       id: build-vars
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         # TARGET_ARCH 和 API_LEVEL 从 job.env 获取
         TARGET_TRIPLE="${TARGET_ARCH}-linux-android"
         # NDK Clang 通常需要 API Level 后缀
@@ -79,6 +88,9 @@ jobs:
 
     - name: 下载源代码 (使用 env 中的版本号)
       run: |
+        #!/bin/bash
+        set -e # Ensure script exits on error
+
         echo "正在下载源码..."
         echo "GCC Version: ${GCC_VERSION}"
         echo "Binutils Version: ${BINUTILS_VERSION}"
@@ -121,6 +133,7 @@ jobs:
         export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
         export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+        export NM="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" # Added NM here as well
 
         echo "Checking tools for Binutils:"
         echo "CC is: $CC"
@@ -128,6 +141,10 @@ jobs:
         echo "AR is: $AR"
         ls -l "$AR"
         "$AR" --version || { echo "AR version check failed"; exit 1; }
+        echo "NM is: $NM" # Check NM
+        ls -l "$NM"
+        "$NM" --version || { echo "NM version check failed"; exit 1; }
+
 
         echo "--- Preparing to configure Binutils ---"
         echo "PWD=$(pwd)"
@@ -138,14 +155,14 @@ jobs:
         fi
         echo "Configure command about to run."
 
-        # Execute configure (Ensure no strange characters before './configure')
+        # Execute configure
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
                     --host=${TARGET_TRIPLE} \
                     --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
                     --disable-nls --disable-werror \
                     --disable-libctf \
-                    --disable-static --enable-shared \
-                     # --disable-gprofng # Optional, keep commented if not needed
+                    --disable-gprofng \  # <--- 添加此标志以禁用 gprofng
+                    --disable-static --enable-shared
 
         echo "运行 Binutils configure 完成。开始 make..."
         make -j${NPROC} || { echo "Binutils make failed"; exit 1; }
@@ -213,6 +230,7 @@ jobs:
         ls -l ${INSTALL_PREFIX}/include/mpc.h || echo "Warning: MPC header might not be installed correctly."
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.* || echo "Warning: MPC library might not be installed correctly."
 
+        # 添加安装路径到全局环境,供后续步骤(如构建 GCC)使用
         echo "Adding ${INSTALL_PREFIX}/bin to PATH for subsequent steps"
         echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
         echo "Adding ${INSTALL_PREFIX}/${LIB_DIR_NAME} to LD_LIBRARY_PATH for subsequent steps"
@@ -225,6 +243,7 @@ jobs:
         set -e # Ensure script exits on error
 
         echo "开始构建 GCC (版本: ${GCC_VERSION})..."
+        # PATH and LD_LIBRARY_PATH should be set correctly via GITHUB_ENV from previous steps
         echo "Current PATH for GCC build: $PATH"
         echo "Current LD_LIBRARY_PATH for GCC build: $LD_LIBRARY_PATH"
         cd gcc-${GCC_VERSION}
@@ -240,7 +259,8 @@ jobs:
         export NM="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
         export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME}"
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
-        # export LDFLAGS="${LDFLAGS} --sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot" # Add if needed
+        # Linker might need explicit sysroot for runtime libs? Add if needed.
+        # export LDFLAGS="${LDFLAGS} --sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
         echo "CPPFLAGS for GCC: $CPPFLAGS"
         echo "LDFLAGS for GCC: $LDFLAGS"
@@ -260,6 +280,9 @@ jobs:
         fi
         echo "Configure command about to run."
 
+        # 执行 configure (这部分参数仍然需要根据实际错误进行大量调试)
+        # 注意: --with-gmp, --with-mpfr, --with-mpc 依赖于依赖项的 make install 被执行
+        # Added --with-as and --with-ld explicitly pointing to binutils install
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
                     --host=${TARGET_TRIPLE} \
                     --build=$(./config.guess) \
@@ -277,11 +300,12 @@ jobs:
                     --disable-libsanitizer \
                     --disable-libatomic \
                     --disable-gprofng \
-                    --disable-bootstrap \
-                    --disable-multilib \
-                    --disable-static --enable-shared
+                    --disable-bootstrap \ # Keep disabled for faster CI runs, enable if correctness issues appear
+                    --disable-multilib \ # Android 通常不需要
+                    --disable-static --enable-shared # 动态链接
 
         echo "运行 GCC configure 完成。开始 make..."
+        # GCC make can take a very long time!
         make -j${NPROC} || { echo "GCC make failed"; exit 1; }
         make install || { echo "GCC make install failed"; exit 1; }
         echo "GCC 构建和安装完成。"
@@ -323,6 +347,9 @@ jobs:
         # 复制 Binutils 工具
         copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as ${MODULE_DIR}/system/bin/as
         copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld ${MODULE_DIR}/system/bin/ld
+        # Add other binutils if needed (ar, ranlib, strip, objdump etc.)
+        # copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ar ${MODULE_DIR}/system/bin/ar
+        # copy_or_fail ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ranlib ${MODULE_DIR}/system/bin/ranlib
 
         # 复制 GCC 内部工具
         copy_dir_or_fail ${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/. ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/
