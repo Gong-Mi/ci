@@ -48,13 +48,20 @@ jobs:
         INSTALL_PREFIX="${GITHUB_WORKSPACE}/install_dir"
         # Magisk 模块目录
         MODULE_DIR="${GITHUB_WORKSPACE}/gcc_magisk_module"
+        # 根据架构确定库目录名
+        if [ "${TARGET_ARCH}" == "aarch64" ] || [ "${TARGET_ARCH}" == "x86_64" ]; then
+          LIB_DIR_NAME="lib64"
+        else
+          LIB_DIR_NAME="lib"
+        fi
 
-        # 将这些变量也写入 GitHub Actions 环境变量供后续步骤使用
+        # 将这些变量写入 GitHub Actions 环境变量供后续步骤使用
         echo "TARGET_TRIPLE=${TARGET_TRIPLE}" >> $GITHUB_ENV
         echo "TOOLCHAIN_TARGET=${TOOLCHAIN_TARGET}" >> $GITHUB_ENV
         echo "INSTALL_PREFIX=${INSTALL_PREFIX}" >> $GITHUB_ENV
         echo "MODULE_DIR=${MODULE_DIR}" >> $GITHUB_ENV
-        # 将 NDK 工具链添加到 PATH 环境变量
+        echo "LIB_DIR_NAME=${LIB_DIR_NAME}" >> $GITHUB_ENV # 将库目录名也设为环境变量
+        # 将 NDK 工具链添加到全局 PATH 环境变量 (主要影响后续步骤)
         echo "PATH=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}" >> $GITHUB_ENV
 
         # 创建所需目录
@@ -65,6 +72,7 @@ jobs:
         echo "MODULE_DIR=${MODULE_DIR}"
         echo "TARGET_TRIPLE=${TARGET_TRIPLE}"
         echo "TOOLCHAIN_TARGET=${TOOLCHAIN_TARGET}"
+        echo "LIB_DIR_NAME=${LIB_DIR_NAME}"
 
     - name: 下载源代码 (使用 env 中的版本号)
       run: |
@@ -90,53 +98,57 @@ jobs:
         ls -l # 列出文件以确认解压成功
 
     - name: 构建依赖项 (Binutils, GMP, MPFR, MPC)
-      # 使用 export 设置环境变量，然后执行 configure
+      # 在脚本内部更新 PATH, 使用工具的完整路径导出变量
       run: |
         echo "开始构建依赖项..."
-        echo "当前工作目录内容 (构建依赖前):"
+        # 显式地将 NDK bin 目录添加到此脚本环境的 PATH 开头
+        export PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+        echo "Updated PATH for dependency build: $PATH"
+        echo "Current work dir: $(pwd)"
         ls -l # 确认源码目录存在
 
         # --- 构建 Binutils ---
         echo "构建 Binutils (版本: ${BINUTILS_VERSION})..."
-        cd binutils-${BINUTILS_VERSION} # 进入源码目录
-
-        # 先导出环境变量
+        cd binutils-${BINUTILS_VERSION}
+        # 导出变量，对 ar/ranlib/strip 使用完整路径
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${TARGET_TRIPLE}-ar"
-        export RANLIB="${TARGET_TRIPLE}-ranlib"
-        export STRIP="${TARGET_TRIPLE}-strip"
-        # 可选：打印检查变量值
-        echo "CC is: $CC"
-        echo "CXX is: $CXX"
-        echo "AR is: $AR"
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+        echo "AR is: $AR" # 验证是否使用了完整路径
 
-        # 再执行 configure 命令
+        # 执行 configure
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
                     --host=${TARGET_TRIPLE} \
                     --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
                     --disable-nls --disable-werror \
-                    --disable-static --enable-shared
+                    --disable-static --enable-shared # 动态链接
 
         echo "运行 Binutils configure 完成。准备 make (已注释掉)..."
-        # make -j$(nproc) # 取消注释以实际编译
-        # make install # 取消注释以实际安装
+        # !! 取消注释前，请确认 configure 成功完成 (检查 config.log) !!
+        # make -j$(nproc)
+        # make install
         echo "跳过 Binutils make & make install (占位符)"
-        cd .. # 返回上一级目录
+        cd ..
 
         # --- 构建 GMP ---
         echo "构建 GMP (版本: ${GMP_VERSION})..."
         cd gmp-${GMP_VERSION}
+        # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${TARGET_TRIPLE}-ar"
-        export RANLIB="${TARGET_TRIPLE}-ranlib"
-        # GMP 可能需要 ABI 设置，交叉编译时复杂，先尝试基本配置
-        # export ABI=$TARGET_ARCH # aarch64 or other, depends on GMP configure script needs
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+
+        # 执行 configure
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
                      --enable-cxx \
-                     --disable-static --enable-shared
+                     --disable-static --enable-shared # 动态链接
+
         echo "运行 GMP configure 完成。准备 make (已注释掉)..."
+        # !! 取消注释前，请确认 configure 成功完成 (检查 config.log) !!
         # make -j$(nproc)
         # make install
         echo "跳过 GMP configure & make (占位符)"
@@ -145,14 +157,23 @@ jobs:
         # --- 构建 MPFR ---
         echo "构建 MPFR (版本: ${MPFR_VERSION})..."
         cd mpfr-${MPFR_VERSION}
+        # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${TARGET_TRIPLE}-ar"
-        export RANLIB="${TARGET_TRIPLE}-ranlib"
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+        echo "AR for MPFR is: $AR" # 验证路径
+
+        # 执行 configure
+        # 注意: --with-gmp 依赖于上一步 GMP 的 make install 被执行
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
                     --with-gmp=${INSTALL_PREFIX} \
-                    --disable-static --enable-shared
+                    --disable-static --enable-shared # 动态链接
+
         echo "运行 MPFR configure 完成。准备 make (已注释掉)..."
+        # !! 取消注释前，请确认 configure 成功完成 (检查 config.log) !!
+        # !! 并且确认 GMP 已成功安装到 ${INSTALL_PREFIX} !!
         # make -j$(nproc)
         # make install
         echo "跳过 MPFR configure & make (占位符)"
@@ -161,44 +182,58 @@ jobs:
         # --- 构建 MPC ---
         echo "构建 MPC (版本: ${MPC_VERSION})..."
         cd mpc-${MPC_VERSION}
+        # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${TARGET_TRIPLE}-ar"
-        export RANLIB="${TARGET_TRIPLE}-ranlib"
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+
+        # 执行 configure
+        # 注意: --with-gmp 和 --with-mpfr 依赖于前两步的 make install 被执行
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
                     --with-gmp=${INSTALL_PREFIX} \
                     --with-mpfr=${INSTALL_PREFIX} \
-                    --disable-static --enable-shared
+                    --disable-static --enable-shared # 动态链接
+
         echo "运行 MPC configure 完成。准备 make (已注释掉)..."
+        # !! 取消注释前，请确认 configure 成功完成 (检查 config.log) !!
+        # !! 并且确认 GMP 和 MPFR 已成功安装到 ${INSTALL_PREFIX} !!
         # make -j$(nproc)
         # make install
         echo "跳过 MPC configure & make (占位符)"
         cd ..
 
-        # 添加路径到环境 (这一部分保持不变)
+        # 添加安装路径到全局环境，供后续步骤（如构建 GCC）使用
         echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/lib64:${INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV # 注意：lib64/lib 可能需要根据架构调整
+        # 设置 LD_LIBRARY_PATH 指向安装的库目录
+        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
         echo "依赖项构建步骤完成 (大部分跳过)。"
 
     - name: 构建 GCC
-      # 这是最复杂的部分。同样建议使用 export 设置环境变量。
+      # 在脚本内部更新 PATH, 使用工具的完整路径导出变量
       run: |
         echo "开始构建 GCC (版本: ${GCC_VERSION})..."
+        # 显式地将 NDK bin 和 依赖安装 bin 目录添加到此脚本环境的 PATH 开头
+        export PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${INSTALL_PREFIX}/bin:${PATH}"
+        echo "Updated PATH for GCC build: $PATH"
         cd gcc-${GCC_VERSION}
 
-        # 先导出环境变量
+        # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${TARGET_TRIPLE}-ar"
-        export RANLIB="${TARGET_TRIPLE}-ranlib"
-        export STRIP="${TARGET_TRIPLE}-strip"
-        # LDFLAGS 可能需要指向依赖库
-        export LDFLAGS="-L${INSTALL_PREFIX}/lib64 -L${INSTALL_PREFIX}/lib" # 注意：lib64/lib 可能需要根据架构调整
-        # CPPFLAGS 可能需要指向依赖库的 include 目录
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+        # LDFLAGS 指向安装的库目录
+        export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME}"
+        # CPPFLAGS 指向安装的头文件目录
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
+        echo "CPPFLAGS for GCC: $CPPFLAGS"
+        echo "LDFLAGS for GCC: $LDFLAGS"
 
-        # 再执行 configure 命令
-        # !! 非常重要: 下面的 configure 仍然需要调试 !!
+        # 执行 configure (这部分参数仍然需要根据实际错误进行大量调试)
+        # 注意: --with-gmp, --with-mpfr, --with-mpc 依赖于依赖项的 make install 被执行
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
                     --host=${TARGET_TRIPLE} \
                     --build=$(./config.guess) \
@@ -211,12 +246,14 @@ jobs:
                     --disable-libssp \
                     --disable-libgomp \
                     --disable-libquadmath \
-                    --disable-bootstrap \
-                    --disable-multilib \
-                    --disable-static --enable-shared # 建议动态链接
+                    --disable-bootstrap \ # 尝试禁用 bootstrap 以加快速度 (可能引入问题)
+                    --disable-multilib \ # Android 通常不需要
+                    --disable-static --enable-shared # 动态链接
 
         echo "运行 GCC configure 完成。准备 make (已注释掉)..."
-        # make -j$(nproc) # 非常非常耗时
+        # !! 取消注释前，请确认 configure 成功完成 (检查 config.log) !!
+        # !! 并且确认所有依赖项已成功安装到 ${INSTALL_PREFIX} !!
+        # make -j$(nproc) # 这会非常非常耗时
         # make install
         echo "跳过 GCC make & make install (占位符)"
         cd ..
@@ -228,20 +265,15 @@ jobs:
         MODULE_ID="gcc-cross-android-${TARGET_ARCH}"
         MODULE_NAME="GCC for Android (${TARGET_ARCH})"
         MODULE_VERSION="v${GCC_VERSION}"
-        MODULE_AUTHOR="GitHub Actions CI" # 修改为你的名字
+        MODULE_AUTHOR="GitHub Actions CI" # 或者你的名字
 
         # 创建目录结构
         mkdir -p ${MODULE_DIR}/system/bin
-        if [ "${TARGET_ARCH}" == "aarch64" ] || [ "${TARGET_ARCH}" == "x86_64" ]; then
-          LIB_DIR="lib64"
-        else
-          LIB_DIR="lib"
-        fi
-        mkdir -p ${MODULE_DIR}/system/${LIB_DIR}
+        mkdir -p ${MODULE_DIR}/system/${LIB_DIR_NAME} # 使用之前确定的库目录名
         mkdir -p ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}
         mkdir -p ${MODULE_DIR}/META-INF/com/google/android
 
-        echo "复制文件 (占位符)..."
+        echo "复制文件 (占位符 - 需要实际构建完成)..."
         # 复制主要可执行文件
         cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc ${MODULE_DIR}/system/bin/gcc || echo "警告: ${TARGET_TRIPLE}-gcc 未找到"
         cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-g++ ${MODULE_DIR}/system/bin/g++ || echo "警告: ${TARGET_TRIPLE}-g++ 未找到"
@@ -251,11 +283,11 @@ jobs:
         # 复制 GCC 内部工具
         cp -rfv ${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/* ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/ || echo "警告: GCC libexec 文件未找到"
         # 复制动态库 (如果采用动态链接)
-        cp -fv ${INSTALL_PREFIX}/${LIB_DIR}/libstdc++.so* ${MODULE_DIR}/system/${LIB_DIR}/ || echo "警告: libstdc++.so 未找到"
-        cp -fv ${INSTALL_PREFIX}/${LIB_DIR}/libgcc_s.so* ${MODULE_DIR}/system/${LIB_DIR}/ || echo "警告: libgcc_s.so 未找到"
-        cp -fv ${INSTALL_PREFIX}/${LIB_DIR}/libgmp.so* ${MODULE_DIR}/system/${LIB_DIR}/ || echo "警告: libgmp.so 未找到"
-        cp -fv ${INSTALL_PREFIX}/${LIB_DIR}/libmpfr.so* ${MODULE_DIR}/system/${LIB_DIR}/ || echo "警告: libmpfr.so 未找到"
-        cp -fv ${INSTALL_PREFIX}/${LIB_DIR}/libmpc.so* ${MODULE_DIR}/system/${LIB_DIR}/ || echo "警告: libmpc.so 未找到"
+        cp -fv ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libstdc++.so* ${MODULE_DIR}/system/${LIB_DIR_NAME}/ || echo "警告: libstdc++.so 未找到"
+        cp -fv ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgcc_s.so* ${MODULE_DIR}/system/${LIB_DIR_NAME}/ || echo "警告: libgcc_s.so 未找到"
+        cp -fv ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgmp.so* ${MODULE_DIR}/system/${LIB_DIR_NAME}/ || echo "警告: libgmp.so 未找到"
+        cp -fv ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpfr.so* ${MODULE_DIR}/system/${LIB_DIR_NAME}/ || echo "警告: libmpfr.so 未找到"
+        cp -fv ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.so* ${MODULE_DIR}/system/${LIB_DIR_NAME}/ || echo "警告: libmpc.so 未找到"
 
         # 创建 module.prop 文件
         echo "创建 module.prop..."
