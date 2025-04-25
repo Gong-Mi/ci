@@ -14,7 +14,7 @@ jobs:
       GMP_VERSION: "6.2.1"
       MPFR_VERSION: "4.1.0"
       MPC_VERSION: "1.2.1"
-      NDK_VERSION: "android-ndk-r27c" # NDK 版本
+      NDK_VERSION: "android-ndk-r27c" # NDK 版本 - 更新以匹配日志
       TARGET_ARCH: "aarch64"          # 目标架构
       API_LEVEL: "30"                 # Android API Level (可以根据需要调高)
 
@@ -135,6 +135,7 @@ jobs:
                     --host=${TARGET_TRIPLE} \
                     --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
                     --disable-nls --disable-werror \
+                    --disable-libctf \ # <--- 添加此标志以禁用 libctf
                     --disable-static --enable-shared # 动态链接
                     # --disable-gprofng # <--- 如果遇到之前的 pthreads 错误，取消此行注释
 
