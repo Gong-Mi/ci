@@ -98,7 +98,7 @@ jobs:
         ls -l # 列出文件以确认解压成功
 
     - name: 构建依赖项 (Binutils, GMP, MPFR, MPC)
-      # 在脚本内部更新 PATH, 使用工具的完整路径导出变量
+      # 在脚本内部更新 PATH, 使用 llvm-* 工具名导出变量
       run: |
         echo "开始构建依赖项..."
         # 显式地将 NDK bin 目录添加到此脚本环境的 PATH 开头
@@ -110,13 +110,18 @@ jobs:
         # --- 构建 Binutils ---
         echo "构建 Binutils (版本: ${BINUTILS_VERSION})..."
         cd binutils-${BINUTILS_VERSION}
-        # 导出变量，对 ar/ranlib/strip 使用完整路径
+        # 导出变量，使用 llvm-* 工具名
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
-        echo "AR is: $AR" # 验证是否使用了完整路径
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+        # --- 添加检查 ---
+        echo "Checking AR tool for Binutils:"
+        ls -l "$AR"
+        "$AR" --version || echo "AR version check failed"
+        # ---------------
+        echo "AR is: $AR"
 
         # 执行 configure
         ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
@@ -138,9 +143,9 @@ jobs:
         # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 
         # 执行 configure
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
@@ -160,10 +165,15 @@ jobs:
         # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
-        echo "AR for MPFR is: $AR" # 验证路径
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+        # --- 添加检查 ---
+        echo "Checking AR tool for MPFR:"
+        ls -l "$AR"
+        "$AR" --version || echo "AR version check failed"
+        # ---------------
+        echo "AR for MPFR is: $AR"
 
         # 执行 configure
         # 注意: --with-gmp 依赖于上一步 GMP 的 make install 被执行
@@ -185,9 +195,9 @@ jobs:
         # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
 
         # 执行 configure
         # 注意: --with-gmp 和 --with-mpfr 依赖于前两步的 make install 被执行
@@ -211,7 +221,7 @@ jobs:
         echo "依赖项构建步骤完成 (大部分跳过)。"
 
     - name: 构建 GCC
-      # 在脚本内部更新 PATH, 使用工具的完整路径导出变量
+      # 在脚本内部更新 PATH, 使用 llvm-* 工具名导出变量
       run: |
         echo "开始构建 GCC (版本: ${GCC_VERSION})..."
         # 显式地将 NDK bin 和 依赖安装 bin 目录添加到此脚本环境的 PATH 开头
@@ -222,15 +232,22 @@ jobs:
         # 导出变量
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ar"
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET_TRIPLE}-strip"
+        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+        # NM 工具可能也需要指定
+        export NM="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
         # LDFLAGS 指向安装的库目录
         export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME}"
         # CPPFLAGS 指向安装的头文件目录
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
         echo "CPPFLAGS for GCC: $CPPFLAGS"
         echo "LDFLAGS for GCC: $LDFLAGS"
+        # --- 添加检查 ---
+        echo "Checking NM tool for GCC:"
+        ls -l "$NM"
+        "$NM" --version || echo "NM version check failed"
+        # ---------------
 
         # 执行 configure (这部分参数仍然需要根据实际错误进行大量调试)
         # 注意: --with-gmp, --with-mpfr, --with-mpc 依赖于依赖项的 make install 被执行
@@ -278,8 +295,11 @@ jobs:
         cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc ${MODULE_DIR}/system/bin/gcc || echo "警告: ${TARGET_TRIPLE}-gcc 未找到"
         cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-g++ ${MODULE_DIR}/system/bin/g++ || echo "警告: ${TARGET_TRIPLE}-g++ 未找到"
         cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-cpp ${MODULE_DIR}/system/bin/cpp || echo "警告: ${TARGET_TRIPLE}-cpp 未找到"
-        cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as ${MODULE_DIR}/system/bin/as || echo "警告: ${TARGET_TRIPLE}-as 未找到"
-        cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld ${MODULE_DIR}/system/bin/ld || echo "警告: ${TARGET_TRIPLE}-ld 未找到"
+        # 复制 llvm-ar 等工具 (如果需要的话，改名为 target-prefixed name)
+        # cp -fv ${INSTALL_PREFIX}/bin/llvm-ar ${MODULE_DIR}/system/bin/${TARGET_TRIPLE}-ar || echo "警告: llvm-ar 未找到" # 示例
+        cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as ${MODULE_DIR}/system/bin/as || echo "警告: ${TARGET_TRIPLE}-as 未找到" # Binutils 提供的
+        cp -fv ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld ${MODULE_DIR}/system/bin/ld || echo "警告: ${TARGET_TRIPLE}-ld 未找到" # Binutils 提供的
+
         # 复制 GCC 内部工具
         cp -rfv ${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/* ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}/ || echo "警告: GCC libexec 文件未找到"
         # 复制动态库 (如果采用动态链接)
