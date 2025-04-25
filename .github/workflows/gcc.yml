@@ -16,7 +16,7 @@ jobs:
       MPC_VERSION: "1.2.1"
       NDK_VERSION: "android-ndk-r25c" # NDK 版本
       TARGET_ARCH: "aarch64"          # 目标架构
-      API_LEVEL: "21"                 # Android API Level
+      API_LEVEL: "33"                 # Android API Level
 
     steps:
     - name: 检出代码 (如果你的仓库包含辅助脚本/配置)
