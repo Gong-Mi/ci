@@ -655,27 +655,10 @@ EOF
         ls -l ${MODULE_DIR}/system/${LIB_DIR_NAME}
 
 
-    - name: 打包模块为 Zip 文件
-      run: |
-        #!/bin/bash
-        set -e # 确保脚本在出错时退出
-
-        echo "开始打包 Zip 文件..."
-        cd ${MODULE_DIR} || exit 1 # 切换到模块目录
-        # 规范化文件名
-        ZIP_FILENAME="GCC-${GCC_VERSION}-android-${TARGET_ARCH}-Magisk-$(date +%Y%m%d).zip"
-        echo "输出文件名: ${ZIP_FILENAME}"
-        zip -r9 "${GITHUB_WORKSPACE}/${ZIP_FILENAME}" . -x ".*" -x "__MACOSX"
-        cd ${GITHUB_WORKSPACE}
-        echo "Zip 文件打包完成: ${ZIP_FILENAME}"
-        ls -lh ${ZIP_FILENAME} # 显示文件大小
-        # 将 zip 文件名保存到环境变量，以便上传步骤使用
-        echo "MODULE_ZIP_NAME=${ZIP_FILENAME}" >> $GITHUB_ENV
-
-    - name: 上传构建产物
+        - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: gcc-magisk-module-${{ env.TARGET_ARCH }}-${{ env.GCC_VERSION }} # Artifact 名称包含架构和版本
-        path: ${{ github.workspace }}/${{ env.MODULE_ZIP_NAME }} # 使用变量指定要上传的文件
-        if-no-files-found: error # 如果 zip 文件没找到则报错
-        retention-days: 7 # 可选：设置产物保留天数
+        name: gcc-magisk-module-${{ env.TARGET_ARCH }}-${{ env.GCC_VERSION }}
+        path: ${{ github.workspace }}/${{ env.MODULE_ZIP_NAME }}
+        if-no-files-found: error # 确保这一行和上面 path: 那行的起始列对齐
+        retention-days: 7        # 确保这一行和上面几行的起始列对齐
