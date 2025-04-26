@@ -1,5 +1,5 @@
-# .github/workflows/gcc.yml
-name: 构建 GCC Magisk 模块
+# .github/workflows/gcc-build-only.yml
+name: 构建 GCC 工具链 (仅构建)
 
 on:
   push:
@@ -8,26 +8,22 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest # 必须使用 Linux 运行环境
-    env: # 定义 Job 级别的环境变量,供所有步骤共享
+    runs-on: ubuntu-latest
+    env:
       # --- Version Configuration ---
-      GCC_VERSION: "12.2.0"        # GCC version to build
-      BINUTILS_VERSION: "2.39"     # Binutils version (compatible with GCC)
-      GMP_VERSION: "6.2.1"         # GNU Multiple Precision Library version
-      MPFR_VERSION: "4.1.0"        # Multiple Precision Floating-Point Reliable Library version
-      MPC_VERSION: "1.2.1"         # Multiple Precision Complex Library version
-
+      GCC_VERSION: "12.2.0"
+      BINUTILS_VERSION: "2.39"
+      GMP_VERSION: "6.2.1"
+      MPFR_VERSION: "4.1.0"
+      MPC_VERSION: "1.2.1"
       # --- NDK Version ---
-      # Using r27c (LTS) for stability. Change if needed (e.g., "android-ndk-r28b").
-      # Newer NDKs might require script adjustments.
-      NDK_VERSION: "android-ndk-r27c"
-
+      NDK_VERSION: "android-ndk-r27c" # Using LTS for stability
       # --- Build Target Configuration ---
-      TARGET_ARCH: "aarch64"       # Target architecture (options: armv7a, aarch64, x86, x86_64)
-      API_LEVEL: "30"              # Android API Level (recommend 21+, 30 is a recent choice)
+      TARGET_ARCH: "aarch64"
+      API_LEVEL: "30"
 
     steps:
-    # 1. Checkout Code (if your repo contains helper scripts or configs)
+    # 1. Checkout Code
     - name: 检出代码
       uses: actions/checkout@v4
 
@@ -35,25 +31,13 @@ jobs:
     - name: 安装基础依赖
       run: |
         #!/bin/bash
-        set -e # Exit immediately if a command exits with a non-zero status.
-
+        set -e
         echo ">>> Updating apt package list..."
         sudo apt-get update -qq
         echo ">>> Installing base build tools and libraries..."
         sudo apt-get install -y --no-install-recommends \
-          build-essential \
-          wget \
-          unzip \
-          zip \
-          bc \
-          tar \
-          xz-utils \
-          texinfo \
-          rsync \
-          libtool \
-          pkg-config \
-          autogen \
-          automake
+          build-essential wget unzip zip bc tar xz-utils texinfo rsync \
+          libtool pkg-config autogen automake
         echo ">>> Base dependencies installed successfully."
 
     # 3. Download and Set Up Android NDK
@@ -62,15 +46,13 @@ jobs:
       run: |
         #!/bin/bash
         set -e
-
         echo ">>> Downloading NDK ${NDK_VERSION}..."
         wget -q https://dl.google.com/android/repository/${NDK_VERSION}-linux.zip -O ${NDK_VERSION}-linux.zip
-        echo ">>> Extracting NDK (this may take a moment)..."
+        echo ">>> Extracting NDK..."
         unzip -q ${NDK_VERSION}-linux.zip
-        # Add NDK path to GitHub Actions environment for subsequent steps
         echo "ANDROID_NDK_HOME=${GITHUB_WORKSPACE}/${NDK_VERSION}" >> $GITHUB_ENV
         echo ">>> NDK path set: ${GITHUB_WORKSPACE}/${NDK_VERSION}"
-        rm -f ${NDK_VERSION}-linux.zip # Clean up the zip file
+        rm -f ${NDK_VERSION}-linux.zip
 
     # 4. Define and Export Build-Specific Variables
     - name: 定义构建特定变量
@@ -78,88 +60,45 @@ jobs:
       run: |
         #!/bin/bash
         set -e
-
         echo ">>> Configuring build variables..."
         echo "Target Architecture: ${TARGET_ARCH}"
         echo "API Level: ${API_LEVEL}"
-        echo "NDK Home: ${ANDROID_NDK_HOME}" # Inherited from previous step's GITHUB_ENV
+        echo "NDK Home: ${ANDROID_NDK_HOME}"
 
-        # Determine Target Triple and Library Directory Name
         case "${TARGET_ARCH}" in
-          armv7a)
-            TARGET_TRIPLE="armv7a-linux-androideabi"
-            LIB_DIR_NAME="lib"
-            ;;
-          aarch64)
-            TARGET_TRIPLE="aarch64-linux-android"
-            LIB_DIR_NAME="lib64"
-            ;;
-          x86)
-            TARGET_TRIPLE="i686-linux-android"
-            LIB_DIR_NAME="lib"
-            ;;
-          x86_64)
-            TARGET_TRIPLE="x86_64-linux-android"
-            LIB_DIR_NAME="lib64"
-            ;;
-          *)
-            echo "ERROR: Unsupported target architecture '${TARGET_ARCH}'" >&2
-            exit 1
-            ;;
+          armv7a) TARGET_TRIPLE="armv7a-linux-androideabi"; LIB_DIR_NAME="lib" ;;
+          aarch64) TARGET_TRIPLE="aarch64-linux-android"; LIB_DIR_NAME="lib64" ;;
+          x86) TARGET_TRIPLE="i686-linux-android"; LIB_DIR_NAME="lib" ;;
+          x86_64) TARGET_TRIPLE="x86_64-linux-android"; LIB_DIR_NAME="lib64" ;;
+          *) echo "ERROR: Unsupported target architecture '${TARGET_ARCH}'" >&2; exit 1 ;;
         esac
 
-        # NDK Clang toolchain target (with API Level suffix)
         TOOLCHAIN_TARGET="${TARGET_TRIPLE}${API_LEVEL}"
-        # Temporary installation directory prefix
-        INSTALL_PREFIX="${GITHUB_WORKSPACE}/install_dir"
-        # Magisk module working directory
-        MODULE_DIR="${GITHUB_WORKSPACE}/gcc_magisk_module"
-        # NDK Sysroot path
+        INSTALL_PREFIX="${GITHUB_WORKSPACE}/install_dir" # Installation directory
+        # MODULE_DIR is no longer needed for this workflow
         NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-        # NDK Toolchain path (Clang, llvm-ar, etc.)
         NDK_TOOLCHAIN_PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
-        # Export variables for subsequent steps via GitHub Actions environment
         echo "TARGET_TRIPLE=${TARGET_TRIPLE}" >> $GITHUB_ENV
         echo "TOOLCHAIN_TARGET=${TOOLCHAIN_TARGET}" >> $GITHUB_ENV
         echo "INSTALL_PREFIX=${INSTALL_PREFIX}" >> $GITHUB_ENV
-        echo "MODULE_DIR=${MODULE_DIR}" >> $GITHUB_ENV
         echo "LIB_DIR_NAME=${LIB_DIR_NAME}" >> $GITHUB_ENV
         echo "NDK_SYSROOT=${NDK_SYSROOT}" >> $GITHUB_ENV
         echo "NDK_TOOLCHAIN_PATH=${NDK_TOOLCHAIN_PATH}" >> $GITHUB_ENV
 
-        # Add NDK toolchain and the future install bin dir to the global PATH
-        # The install dir needs to be created first
         mkdir -p "${INSTALL_PREFIX}/bin"
-        echo "PATH=${NDK_TOOLCHAIN_PATH}:${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
-
-        # Set LD_LIBRARY_PATH for shared library lookup during builds
-        # The install lib dir needs to be created first
         mkdir -p "${INSTALL_PREFIX}/${LIB_DIR_NAME}"
-        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
-
-        # Create other necessary directories
         mkdir -p "${INSTALL_PREFIX}/include"
-        mkdir -p "${MODULE_DIR}"
+        echo "PATH=${NDK_TOOLCHAIN_PATH}:${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
 
         echo ">>> Build variables configured:"
         echo "  INSTALL_PREFIX=${INSTALL_PREFIX}"
-        echo "  MODULE_DIR=${MODULE_DIR}"
-        echo "  TARGET_TRIPLE=${TARGET_TRIPLE}"
-        echo "  TOOLCHAIN_TARGET=${TOOLCHAIN_TARGET}"
-        echo "  LIB_DIR_NAME=${LIB_DIR_NAME}"
-        echo "  NDK_SYSROOT=${NDK_SYSROOT}"
-        echo "  NDK_TOOLCHAIN_PATH=${NDK_TOOLCHAIN_PATH}"
-        echo "  Initial PATH set in GITHUB_ENV"
-        echo "  Initial LD_LIBRARY_PATH set in GITHUB_ENV"
+        # ... other echo statements ...
 
-        # Verify Clang is available in the PATH
         echo ">>> Checking NDK Clang (${TOOLCHAIN_TARGET}-clang)..."
         if ! command -v "${TOOLCHAIN_TARGET}-clang" &> /dev/null; then
             echo "ERROR: NDK Clang (${TOOLCHAIN_TARGET}-clang) not found in PATH." >&2
-            echo "Current PATH: ${PATH}" >&2
-            echo "Expected NDK Toolchain Path: ${NDK_TOOLCHAIN_PATH}" >&2
-            ls -l "${NDK_TOOLCHAIN_PATH}" >&2
             exit 1
         fi
         echo ">>> NDK Clang found: $(${TOOLCHAIN_TARGET}-clang --version | head -n 1)"
@@ -169,19 +108,12 @@ jobs:
       run: |
         #!/bin/bash
         set -e
-
         echo ">>> Downloading sources..."
-        echo "  GCC Version: ${GCC_VERSION}"
         wget -q https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.gz
-        echo "  Binutils Version: ${BINUTILS_VERSION}"
         wget -q https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.gz
-        echo "  GMP Version: ${GMP_VERSION}"
         wget -q https://ftp.gnu.org/gnu/gmp/gmp-${GMP_VERSION}.tar.xz
-        echo "  MPFR Version: ${MPFR_VERSION}"
         wget -q https://ftp.gnu.org/gnu/mpfr/mpfr-${MPFR_VERSION}.tar.xz
-        echo "  MPC Version: ${MPC_VERSION}"
         wget -q https://ftp.gnu.org/gnu/mpc/mpc-${MPC_VERSION}.tar.gz
-
         echo ">>> Downloads complete. Extracting..."
         tar -xf gcc-${GCC_VERSION}.tar.gz
         tar -xf binutils-${BINUTILS_VERSION}.tar.gz
@@ -189,159 +121,81 @@ jobs:
         tar -xf mpfr-${MPFR_VERSION}.tar.xz
         tar -xf mpc-${MPC_VERSION}.tar.gz
         echo ">>> Extraction complete."
-        echo "Current working directory contents:"
-        ls -l
 
     # 6. Build Dependencies (Binutils, GMP, MPFR, MPC) - Cross-Compiled
     - name: 构建依赖项 (Binutils, GMP, MPFR, MPC)
       run: |
         #!/bin/bash
         set -e
-
         echo ">>> Starting build of dependencies (cross-compiling)..."
-        echo "Build PATH: $PATH"
-        echo "Build LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-        echo "Current working directory: $(pwd)"
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
-
-        # --- Determine Build Machine Type ---
-        # config.guess is usually in the source root
         BUILD_MACHINE=$(./gcc-${GCC_VERSION}/config.guess)
-        if [ -z "$BUILD_MACHINE" ]; then
-            echo "ERROR: config.guess failed to determine build machine triplet." >&2
-            exit 1
-        fi
-        export BUILD_MACHINE # Export for configure scripts
+        export BUILD_MACHINE
         echo "Detected Build Machine (Build): $BUILD_MACHINE"
         echo "Target Machine (Host/Target): $TARGET_TRIPLE"
 
-        # --- Set Cross-Compilation Tools (using NDK Clang and LLVM tools) ---
-        export CC="${TOOLCHAIN_TARGET}-clang"
-        export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${NDK_TOOLCHAIN_PATH}/llvm-ar"
-        export RANLIB="${NDK_TOOLCHAIN_PATH}/llvm-ranlib"
-        export STRIP="${NDK_TOOLCHAIN_PATH}/llvm-strip"
-        export NM="${NDK_TOOLCHAIN_PATH}/llvm-nm"
-        export OBJDUMP="${NDK_TOOLCHAIN_PATH}/llvm-objdump"
-        export READELF="${NDK_TOOLCHAIN_PATH}/llvm-readelf"
-        # AS and LD will be provided by the Binutils build below
+        export CC="${TOOLCHAIN_TARGET}-clang" CXX="${TOOLCHAIN_TARGET}-clang++"
+        export AR="${NDK_TOOLCHAIN_PATH}/llvm-ar" RANLIB="${NDK_TOOLCHAIN_PATH}/llvm-ranlib"
+        export STRIP="${NDK_TOOLCHAIN_PATH}/llvm-strip" NM="${NDK_TOOLCHAIN_PATH}/llvm-nm"
+        export OBJDUMP="${NDK_TOOLCHAIN_PATH}/llvm-objdump" READELF="${NDK_TOOLCHAIN_PATH}/llvm-readelf"
 
-        echo ">>> Verifying cross-compilation tools..."
-        echo "  CC: $($CC --version | head -n 1)"
-        echo "  CXX: $($CXX --version | head -n 1)"
-        echo "  AR: $($AR --version)"
-        echo "  RANLIB: $($RANLIB --version)"
-
-        # --- Build Binutils (for Target) ---
-        echo ">>> Building Binutils ${BINUTILS_VERSION} (for ${TARGET_TRIPLE})..."
+        # --- Build Binutils ---
+        echo ">>> Building Binutils ${BINUTILS_VERSION}..."
         cd binutils-${BINUTILS_VERSION}
-        # Configure Binutils: Host is the build machine, Target is Android
-        ./configure --target=${TARGET_TRIPLE} \
-                    --host=${BUILD_MACHINE} \
-                    --build=${BUILD_MACHINE} \
-                    --prefix=${INSTALL_PREFIX} \
-                    --with-sysroot=${NDK_SYSROOT} \
-                    --disable-nls \
-                    --disable-werror \
-                    --disable-gprofng \
-                    --enable-shared \
-                    --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" # Pass tools explicitly
-
-        echo "--- Binutils: make ---"
-        make -j${NPROC} || { echo "ERROR: Binutils make failed" >&2; exit 1; }
-        echo "--- Binutils: make install ---"
-        make install || { echo "ERROR: Binutils make install failed" >&2; exit 1; }
-        echo ">>> Binutils build and install complete."
+        ./configure --target=${TARGET_TRIPLE} --host=${BUILD_MACHINE} --build=${BUILD_MACHINE} \
+                    --prefix=${INSTALL_PREFIX} --with-sysroot=${NDK_SYSROOT} \
+                    --disable-nls --disable-werror --disable-gprofng \
+                    --enable-shared --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}"
+        make -j${NPROC} && make install || { echo "ERROR: Binutils build failed" >&2; exit 1; }
         cd ..
-        echo "Checking Binutils installation in ${INSTALL_PREFIX}/bin:"
-        ls -l ${INSTALL_PREFIX}/bin | grep ${TARGET_TRIPLE} || echo "WARNING: Binutils tools (${TARGET_TRIPLE}-*) might not be installed correctly."
+        echo ">>> Binutils build complete."
 
-        # --- IMPORTANT: Update PATH to include the newly built Binutils ---
-        # This ensures subsequent builds find the correct cross-assembler/linker
+        # --- Update PATH for new Binutils ---
         echo ">>> Updating PATH to prioritize newly built Binutils"
         export PATH="${INSTALL_PREFIX}/bin:${PATH}"
-        echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV # Persist for next steps
-        echo "Updated PATH: $PATH"
-        echo ">>> Verifying new Binutils tools (${TARGET_TRIPLE}-as)..."
+        echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
         if ! command -v "${TARGET_TRIPLE}-as" &> /dev/null; then
-            echo "ERROR: Cannot find newly built Binutils assembler (${TARGET_TRIPLE}-as) in PATH" >&2
-            exit 1
+            echo "ERROR: Cannot find newly built Binutils assembler (${TARGET_TRIPLE}-as) in PATH" >&2; exit 1
         fi
-        echo ">>> New Binutils assembler found: $(${TARGET_TRIPLE}-as --version)"
+        echo ">>> New Binutils assembler found."
 
-        # --- Build GMP (for Target) ---
-        echo ">>> Building GMP ${GMP_VERSION} (for ${TARGET_TRIPLE})..."
+        # --- Build GMP ---
+        echo ">>> Building GMP ${GMP_VERSION}..."
         cd gmp-${GMP_VERSION}
-        # Configure GMP: Host is the target machine (Android)
-        ./configure --prefix=${INSTALL_PREFIX} \
-                    --host=${TARGET_TRIPLE} \
-                    --build=${BUILD_MACHINE} \
-                    --enable-cxx \
-                    --enable-shared \
-                    --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" \
-                    NM="${NM}" STRIP="${STRIP}" # Pass tools
-
-        echo "--- GMP: make ---"
-        make -j${NPROC} || { echo "ERROR: GMP make failed" >&2; exit 1; }
-        echo "--- GMP: make install ---"
-        make install || { echo "ERROR: GMP make install failed" >&2; exit 1; }
-        echo ">>> GMP build and install complete."
+        ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
+                    --enable-cxx --enable-shared --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" NM="${NM}" STRIP="${STRIP}"
+        make -j${NPROC} && make install || { echo "ERROR: GMP build failed" >&2; exit 1; }
         cd ..
-        echo "Checking GMP installation:"
-        ls -l ${INSTALL_PREFIX}/include/gmp*.h ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgmp.* || echo "WARNING: GMP files might not be installed correctly."
+        echo ">>> GMP build complete."
 
-        # --- Build MPFR (for Target) ---
-        echo ">>> Building MPFR ${MPFR_VERSION} (for ${TARGET_TRIPLE})..."
+        # --- Build MPFR ---
+        echo ">>> Building MPFR ${MPFR_VERSION}..."
         cd mpfr-${MPFR_VERSION}
-        ./configure --prefix=${INSTALL_PREFIX} \
-                    --host=${TARGET_TRIPLE} \
-                    --build=${BUILD_MACHINE} \
-                    --with-gmp=${INSTALL_PREFIX} \
-                    --enable-shared \
-                    --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" \
-                    NM="${NM}" STRIP="${STRIP}"
-
-        echo "--- MPFR: make ---"
-        make -j${NPROC} || { echo "ERROR: MPFR make failed" >&2; exit 1; }
-        echo "--- MPFR: make install ---"
-        make install || { echo "ERROR: MPFR make install failed" >&2; exit 1; }
-        echo ">>> MPFR build and install complete."
+        ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
+                    --with-gmp=${INSTALL_PREFIX} --enable-shared --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" NM="${NM}" STRIP="${STRIP}"
+        make -j${NPROC} && make install || { echo "ERROR: MPFR build failed" >&2; exit 1; }
         cd ..
-        echo "Checking MPFR installation:"
-        ls -l ${INSTALL_PREFIX}/include/mpfr.h ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpfr.* || echo "WARNING: MPFR files might not be installed correctly."
+        echo ">>> MPFR build complete."
 
-        # --- Build MPC (for Target) ---
-        echo ">>> Building MPC ${MPC_VERSION} (for ${TARGET_TRIPLE})..."
+        # --- Build MPC ---
+        echo ">>> Building MPC ${MPC_VERSION}..."
         cd mpc-${MPC_VERSION}
-        ./configure --prefix=${INSTALL_PREFIX} \
-                    --host=${TARGET_TRIPLE} \
-                    --build=${BUILD_MACHINE} \
-                    --with-gmp=${INSTALL_PREFIX} \
-                    --with-mpfr=${INSTALL_PREFIX} \
-                    --enable-shared \
-                    --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" \
-                    NM="${NM}" STRIP="${STRIP}"
-
-        echo "--- MPC: make ---"
-        make -j${NPROC} || { echo "ERROR: MPC make failed" >&2; exit 1; }
-        echo "--- MPC: make install ---"
-        make install || { echo "ERROR: MPC make install failed" >&2; exit 1; }
-        echo ">>> MPC build and install complete."
+        ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
+                    --with-gmp=${INSTALL_PREFIX} --with-mpfr=${INSTALL_PREFIX} \
+                    --enable-shared --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" NM="${NM}" STRIP="${STRIP}"
+        make -j${NPROC} && make install || { echo "ERROR: MPC build failed" >&2; exit 1; }
         cd ..
-        echo "Checking MPC installation:"
-        ls -l ${INSTALL_PREFIX}/include/mpc.h ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.* || echo "WARNING: MPC files might not be installed correctly."
+        echo ">>> MPC build complete."
 
-        # --- Update LD_LIBRARY_PATH to find newly built shared libs ---
-        echo ">>> Updating LD_LIBRARY_PATH to include newly built libraries"
+        # --- Update LD_LIBRARY_PATH ---
+        echo ">>> Updating LD_LIBRARY_PATH..."
         export LD_LIBRARY_PATH="${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}"
-        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV # Persist for GCC build
-        echo "Updated LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-
+        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
         echo ">>> Dependencies build step finished successfully."
 
     # 7. Build GCC (Cross-Compiled)
@@ -349,96 +203,38 @@ jobs:
       run: |
         #!/bin/bash
         set -e
-
-        echo ">>> Starting build of GCC ${GCC_VERSION} (for ${TARGET_TRIPLE})..."
-        # PATH should now include NDK tools and the cross-Binutils
-        # LD_LIBRARY_PATH should now include GMP/MPFR/MPC shared libraries
-        echo "GCC Build PATH: $PATH"
-        echo "GCC Build LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+        echo ">>> Starting build of GCC ${GCC_VERSION}..."
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
-
-        # --- Get Build Machine (should be inherited via env) ---
-        if [ -z "$BUILD_MACHINE" ]; then
-          echo "ERROR: BUILD_MACHINE environment variable not set." >&2
-          exit 1
-        fi
-        echo "Build Machine (Build): $BUILD_MACHINE"
-        echo "Host Machine (Host): $TARGET_TRIPLE"   # Where the compiler will run (Android)
-        echo "Target Machine (Target): $TARGET_TRIPLE" # What the compiler will target (Android)
+        if [ -z "$BUILD_MACHINE" ]; then echo "ERROR: BUILD_MACHINE not set." >&2; exit 1; fi
+        echo "Build Machine: $BUILD_MACHINE, Host/Target: $TARGET_TRIPLE"
 
         cd gcc-${GCC_VERSION}
-        # Recommended: Build in a separate directory
         mkdir -p build && cd build
 
-        # --- Set GCC Build Tools ---
-        # Compiler used to build GCC itself (cross-compiler, since build != host)
-        export CC="${TOOLCHAIN_TARGET}-clang"
-        export CXX="${TOOLCHAIN_TARGET}-clang++"
-        # Use the cross-Binutils we built earlier
-        export AR="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ar"
-        export RANLIB="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ranlib"
-        export AS="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as"
-        export LD="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld"
-        export NM="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-nm"
-        export STRIP="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-strip"
-
-        # Tools used to build GCC's target libraries (libgcc, libstdc++)
-        export AR_FOR_TARGET="${AR}"
-        export RANLIB_FOR_TARGET="${RANLIB}"
-        export AS_FOR_TARGET="${AS}"
-        export LD_FOR_TARGET="${LD}"
-        export NM_FOR_TARGET="${NM}"
-        export STRIP_FOR_TARGET="${STRIP}"
+        export CC="${TOOLCHAIN_TARGET}-clang" CXX="${TOOLCHAIN_TARGET}-clang++"
+        export AR="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ar" RANLIB="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ranlib"
+        export AS="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as" LD="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld"
+        export NM="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-nm" STRIP="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-strip"
+        export AR_FOR_TARGET="${AR}" RANLIB_FOR_TARGET="${RANLIB}" AS_FOR_TARGET="${AS}" LD_FOR_TARGET="${LD}"
+        export NM_FOR_TARGET="${NM}" STRIP_FOR_TARGET="${STRIP}"
         export OBJDUMP_FOR_TARGET="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-objdump"
         export READELF_FOR_TARGET="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-readelf"
-
-        # Compiler used to build host tools needed during GCC build (native compiler)
-        export CC_FOR_BUILD=$(command -v gcc)
-        export CXX_FOR_BUILD=$(command -v g++)
-
-        # Point to dependency headers and libraries
+        export CC_FOR_BUILD=$(command -v gcc) CXX_FOR_BUILD=$(command -v g++)
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
-        # Use rpath-link to help the linker find shared libs during the build
         export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME} -Wl,-rpath-link=${INSTALL_PREFIX}/${LIB_DIR_NAME}"
 
-        echo ">>> Verifying GCC build tools..."
-        echo "  CC (cross): $($CC --version | head -n 1)"
-        echo "  AS_FOR_TARGET: $($AS_FOR_TARGET --version)"
-        echo "  LD_FOR_TARGET: $($LD_FOR_TARGET --version)"
-        echo "  CC_FOR_BUILD (native): $($CC_FOR_BUILD --version | head -n 1)"
-
         echo ">>> Configuring GCC..."
-        # Configure GCC: Host and Target are the Android machine
-        ../configure --target=${TARGET_TRIPLE} \
-                     --host=${TARGET_TRIPLE} \
-                     --build=${BUILD_MACHINE} \
-                     --prefix=${INSTALL_PREFIX} \
-                     --with-sysroot=${NDK_SYSROOT} \
-                     --with-gmp=${INSTALL_PREFIX} \
-                     --with-mpfr=${INSTALL_PREFIX} \
-                     --with-mpc=${INSTALL_PREFIX} \
-                     --with-binutils=${INSTALL_PREFIX}/bin \
-                     --with-native-system-header-dir=/system/usr/include \
-                     --enable-languages=c,c++ \
-                     --enable-shared \
-                     --disable-static \
-                     --disable-nls \
-                     --disable-bootstrap \
-                     --disable-multilib \
-                     --disable-libsanitizer \
-                     --disable-libssp \
-                     --disable-libgomp \
-                     --disable-libquadmath \
-                     --disable-libatomic \
-                     --disable-libvtv \
-                     --disable-gold \
-                     --enable-initfini-array \
+        ../configure --target=${TARGET_TRIPLE} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
+                     --prefix=${INSTALL_PREFIX} --with-sysroot=${NDK_SYSROOT} \
+                     --with-gmp=${INSTALL_PREFIX} --with-mpfr=${INSTALL_PREFIX} --with-mpc=${INSTALL_PREFIX} \
+                     --with-binutils=${INSTALL_PREFIX}/bin --with-native-system-header-dir=/system/usr/include \
+                     --enable-languages=c,c++ --enable-shared --disable-static --disable-nls \
+                     --disable-bootstrap --disable-multilib --disable-libsanitizer --disable-libssp \
+                     --disable-libgomp --disable-libquadmath --disable-libatomic --disable-libvtv \
+                     --disable-gold --enable-initfini-array \
                      --enable-fix-cortex-a53-835769 --enable-fix-cortex-a53-843419 \
-                     # Pass environment variables explicitly to ensure configure finds them
-                     CC="${CC}" CXX="${CXX}" \
-                     AR="${AR}" RANLIB="${RANLIB}" \
-                     AS="${AS}" LD="${LD}" NM="${NM}" STRIP="${STRIP}" \
+                     CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" AS="${AS}" LD="${LD}" NM="${NM}" STRIP="${STRIP}" \
                      AR_FOR_TARGET="${AR_FOR_TARGET}" RANLIB_FOR_TARGET="${RANLIB_FOR_TARGET}" \
                      AS_FOR_TARGET="${AS_FOR_TARGET}" LD_FOR_TARGET="${LD_FOR_TARGET}" \
                      NM_FOR_TARGET="${NM_FOR_TARGET}" STRIP_FOR_TARGET="${STRIP_FOR_TARGET}" \
@@ -449,280 +245,23 @@ jobs:
         echo ">>> Running GCC make (this will take a long time)..."
         make -j${NPROC} || { echo "ERROR: GCC make failed" >&2; exit 1; }
 
-        echo ">>> Running GCC make install-strip (installing and stripping)..."
-        # Use install-strip to reduce installed size
+        echo ">>> Running GCC make install-strip..."
         make install-strip || { echo "ERROR: GCC make install failed" >&2; exit 1; }
 
         echo ">>> GCC build and install complete."
-        cd ../.. # Return to the source root directory
+        cd ../..
         echo "Checking GCC installation in ${INSTALL_PREFIX}/bin:"
-        ls -l ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc || echo "WARNING: GCC compiler (${TARGET_TRIPLE}-gcc) might not be installed correctly."
+        ls -l ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc || echo "WARNING: GCC compiler might not be installed correctly."
         echo "Checking GCC runtime libraries in ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
         ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libstdc++.so* ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgcc_s.so* || echo "WARNING: GCC runtime libraries might not be installed correctly."
 
-    # 8. Create Magisk Module Structure and Copy Files
-    - name: 创建 Magisk 模块结构
-      run: |
-        #!/bin/bash
-        set -e
-
-        echo ">>> Creating Magisk module structure..."
-        MODULE_ID="gcc-cross-android-${TARGET_ARCH}"
-        MODULE_NAME="GCC ${GCC_VERSION} for Android (${TARGET_ARCH})"
-        MODULE_VERSION="v${GCC_VERSION}"
-        # Generate versionCode from GCC version (e.g., 12.2.0 -> 120200)
-        MODULE_VERSION_CODE=$(echo $GCC_VERSION | awk -F. '{ printf "%d%02d%02d\n", $1, $2, $3 }')
-        MODULE_AUTHOR="GitHub Actions CI ($(date +%Y%m%d))"
-        MODULE_DESCRIPTION="GCC ${GCC_VERSION} toolchain (C/C++) built for Android ${TARGET_ARCH}. Installs to /system. Built by GitHub Actions CI."
-
-        # --- Create Directory Structure ---
-        echo "Creating module directories in ${MODULE_DIR}"
-        mkdir -p ${MODULE_DIR}/system/bin
-        mkdir -p ${MODULE_DIR}/system/${LIB_DIR_NAME}
-        # GCC internal paths
-        mkdir -p ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}
-        mkdir -p ${MODULE_DIR}/system/include/c++/${GCC_VERSION}
-        mkdir -p ${MODULE_DIR}/system/lib/gcc/${TARGET_TRIPLE}/${GCC_VERSION}
-        # Magisk metadata directory
-        mkdir -p ${MODULE_DIR}/META-INF/com/google/android
-
-        echo ">>> Copying installed files to module directory..."
-
-        # Helper function for verbose copy with error check
-        copy_verbose() {
-          local src="$1"
-          local dest="$2"
-          if [ ! -e "$src" ]; then
-            echo "WARNING: Source '$src' does not exist, skipping copy." >&2
-            return 1
-          fi
-          echo "  Copying: ${src} -> ${dest}"
-          # -a preserves attributes, -L follows symlinks
-          cp -aL "${src}" "${dest}" || { echo "ERROR: Failed to copy '$1' to '$2'." >&2; exit 1; }
-          return 0
-        }
-
-        # Helper function for verbose rsync with error check
-        rsync_verbose() {
-          local src_dir="$1/" # Trailing slash copies contents
-          local dest_dir="$2/"
-           if [ ! -d "$1" ]; then
-            echo "WARNING: Source directory '$1' does not exist, skipping sync." >&2
-            return 1
-          fi
-          echo "  Syncing Dir: ${src_dir} -> ${dest_dir}"
-          # -a archive, --copy-links copy target, --no-owner/group avoid permission issues in CI
-          rsync -a --copy-links --no-owner --no-group "${src_dir}" "${dest_dir}" || { echo "ERROR: Failed to sync directory '$1' to '$2'." >&2; exit 1; }
-          return 0
-        }
-
-        # Copy main executables (Binutils + GCC), simplifying names
-        echo "--- Copying executables to system/bin (simplified names)..."
-        copied_bins=0
-        for tool in gcc g++ cpp as ld ar ranlib strip nm objdump readelf size strings; do
-            src_file="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-${tool}"
-            dest_file="${MODULE_DIR}/system/bin/${tool}" # Simplified name in module
-            if copy_verbose "${src_file}" "${dest_file}"; then
-                chmod 755 "${dest_file}" # Ensure executable
-                copied_bins=$((copied_bins + 1))
-            fi
-        done
-        if [ "$copied_bins" -eq 0 ]; then
-            echo "ERROR: Failed to copy any Binutils/GCC executables." >&2; exit 1;
-        fi
-
-        # Copy GCC internal tools (libexec)
-        echo "--- Copying GCC libexec files..."
-        libexec_src="${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
-        libexec_dest="${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
-        if rsync_verbose "${libexec_src}" "${libexec_dest}"; then
-          find "${libexec_dest}" -type f -exec chmod 644 {} \; # Default 644
-          # Make main internal compilers/linkers executable
-          find "${libexec_dest}" -type f \( -name 'cc1' -o -name 'cc1plus' -o -name 'collect2' -o -name 'lto1' -o -name 'lto-wrapper' \) -exec chmod 755 {} \;
-        fi
-
-        # Copy GCC support libraries (lib/gcc)
-        echo "--- Copying GCC lib files..."
-        libgcc_src="${INSTALL_PREFIX}/lib/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
-        libgcc_dest="${MODULE_DIR}/system/lib/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
-        if rsync_verbose "${libgcc_src}" "${libgcc_dest}"; then
-          find "${libgcc_dest}" -type f -exec chmod 644 {} \; # Libs usually 644
-        fi
-
-        # Copy C++ headers
-        echo "--- Copying C++ headers..."
-        cxx_include_src="${INSTALL_PREFIX}/include/c++/${GCC_VERSION}"
-        cxx_include_dest="${MODULE_DIR}/system/include/c++/${GCC_VERSION}"
-        if rsync_verbose "${cxx_include_src}" "${cxx_include_dest}"; then
-          find "${cxx_include_dest}" -type f -exec chmod 644 {} \;
-        fi
-
-        # Copy runtime shared libraries (GMP, MPFR, MPC, libstdc++, libgcc_s)
-        echo "--- Copying runtime shared libraries to system/${LIB_DIR_NAME}..."
-        shared_lib_src_dir="${INSTALL_PREFIX}/${LIB_DIR_NAME}"
-        shared_lib_dest_dir="${MODULE_DIR}/system/${LIB_DIR_NAME}"
-        copied_libs=0
-        if [ -d "${shared_lib_src_dir}" ]; then
-             # Find and copy main .so files and their symlinks
-             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libgmp.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
-             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libmpfr.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
-             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libmpc.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
-             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libstdc++.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
-             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libgcc_s.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
-
-             # Set shared library permissions to 755 (executable/loadable)
-             find "${shared_lib_dest_dir}" -name '*.so*' -type f -exec chmod 755 {} \;
-             copied_libs=$(find "${shared_lib_dest_dir}" -name '*.so*' -type f | wc -l)
-        else
-            echo "WARNING: Shared library source directory ${shared_lib_src_dir} not found."
-        fi
-
-        # Verify essential libraries were copied
-        if ! ls "${shared_lib_dest_dir}/libstdc++."* > /dev/null 2>&1 || \
-           ! ls "${shared_lib_dest_dir}/libgcc_s."* > /dev/null 2>&1 || \
-           ! ls "${shared_lib_dest_dir}/libgmp."* > /dev/null 2>&1 || \
-           ! ls "${shared_lib_dest_dir}/libmpfr."* > /dev/null 2>&1 || \
-           ! ls "${shared_lib_dest_dir}/libmpc."* > /dev/null 2>&1 ; then
-           echo "ERROR: Failed to copy one or more essential runtime libraries to ${shared_lib_dest_dir}. GCC will likely fail." >&2
-           # Consider failing the build if libs are critical: exit 1
-        else
-           echo ">>> Shared libraries copied successfully ($copied_libs files):"
-           ls -l ${shared_lib_dest_dir}
-        fi
-
-        # Create module.prop file
-        echo ">>> Creating module.prop..."
-        # IMPORTANT: Ensure the closing EOF marker below is at the START of the line with NO leading spaces.
-        cat << EOF > ${MODULE_DIR}/module.prop
-id=${MODULE_ID}
-name=${MODULE_NAME}
-version=${MODULE_VERSION}
-versionCode=${MODULE_VERSION_CODE}
-author=${MODULE_AUTHOR}
-description=${MODULE_DESCRIPTION}
-minMagisk=20400
-arch=${TARGET_ARCH}
-# Optional: Provide URL for update checks
-# updateJson=https://example.com/updates/${MODULE_ID}.json
-EOF # <-- MUST BE AT THE START OF THE LINE
-
-        echo "--- module.prop Content ---"
-        cat ${MODULE_DIR}/module.prop
-        echo "---------------------------"
-
-        # Create META-INF files (standard Magisk installer stub)
-        echo ">>> Creating META-INF files..."
-        # update-binary script
-        # IMPORTANT: Ensure the closing EOF marker below is at the START of the line with NO leading spaces.
-        cat << 'EOF' > ${MODULE_DIR}/META-INF/com/google/android/update-binary
-#!/sbin/sh
-# Magisk Module Installer Script v1
-
-# Default permissions
-umask 022
-
-# Utility functions (usually provided by Magisk/KernelSU environment)
-# . /data/adb/magisk/util_functions.sh
-
-# Magisk environment variables:
-# $MODPATH, $TMPDIR, $ZIPFILE, $ARCH, $IS64BIT, $API
-
-ui_print() {
-  echo "$1"
-}
-
-abort() {
-  ui_print "! $1"
-  exit 1
-}
-
-# Optional: Check Magisk Version
-# if [ $MAGISK_VER_CODE -lt 20400 ]; then
-#   abort "Magisk 20.4+ is required!"
-# fi
-
-ui_print "- Extracting module files"
-unzip -oq "$ZIPFILE" 'system/*' -d $MODPATH >&2
-
-# Remove placeholder files if any
-find $MODPATH/system -type f -name '.gitkeep' -delete
-
-ui_print "- Setting permissions"
-# set_perm_recursive <path> <owner> <group> <dir_perm> <file_perm> [context]
-set_perm_recursive $MODPATH 0 0 0755 0644 # Base permissions
-
-# Binaries need execute (0755)
-set_perm_recursive $MODPATH/system/bin 0 0 0755 0755
-# Shared libraries need execute (0755)
-if [ -d "$MODPATH/system/lib" ]; then
-  set_perm_recursive $MODPATH/system/lib 0 0 0755 0755
-fi
-if [ -d "$MODPATH/system/lib64" ]; then
-  set_perm_recursive $MODPATH/system/lib64 0 0 0755 0755
-fi
-# Libexec internal binaries need execute (0755)
-if [ -d "$MODPATH/system/libexec" ]; then
-  set_perm_recursive $MODPATH/system/libexec 0 0 0755 0644 # Dirs 755, files 644 default
-  # Make specific internal tools executable
-  find $MODPATH/system/libexec -type f \( -name 'cc1' -o -name 'cc1plus' -o -name 'collect2' -o -name 'lto1' -o -name 'lto-wrapper' \) -exec chmod 0755 {} \;
-fi
-# Includes just need read (0644)
-if [ -d "$MODPATH/system/include" ]; then
-  set_perm_recursive $MODPATH/system/include 0 0 0755 0644
-fi
-# GCC internal libs (lib/gcc) need read (0644)
-if [ -d "$MODPATH/system/lib/gcc" ]; then
-  set_perm_recursive $MODPATH/system/lib/gcc 0 0 0755 0644
-fi
-
-# Clean up empty directories (optional)
-# find $MODPATH/system -type d -empty -delete
-
-ui_print "- Installation complete"
-exit 0
-EOF # <-- MUST BE AT THE START OF THE LINE
-        chmod 755 ${MODULE_DIR}/META-INF/com/google/android/update-binary
-
-        # updater-script (usually empty)
-        touch ${MODULE_DIR}/META-INF/com/google/android/updater-script
-
-        echo ">>> Module structure created successfully."
-        echo "Module Top-Level Contents:"
-        ls -l ${MODULE_DIR}
-        echo "Module /system/bin Contents:"
-        ls -l ${MODULE_DIR}/system/bin
-        echo "Module /system/${LIB_DIR_NAME} Contents:"
-        ls -l ${MODULE_DIR}/system/${LIB_DIR_NAME}
-
-    # 9. Package Module into Zip File
-    - name: 打包模块为 Zip 文件
-      run: |
-        #!/bin/bash
-        set -e
-
-        echo ">>> Packaging module into Zip file..."
-        cd ${MODULE_DIR} || { echo "ERROR: Cannot change directory to ${MODULE_DIR}" >&2; exit 1; }
-
-        # Standardized zip filename
-        ZIP_FILENAME="GCC-${GCC_VERSION}-android-${TARGET_ARCH}-Magisk-$(date +%Y%m%d).zip"
-        echo "Output filename: ${ZIP_FILENAME}"
-
-        # Create zip: -r recursive, -9 max compression, '.' current dir
-        # Exclude common unnecessary files/dirs
-        zip -r9 "${GITHUB_WORKSPACE}/${ZIP_FILENAME}" . -x ".git/*" -x ".github/*" -x ".*" -x "__MACOSX"
-
-        cd ${GITHUB_WORKSPACE}
-        echo ">>> Zip file created successfully: ${ZIP_FILENAME}"
-        ls -lh ${ZIP_FILENAME} # Show file size
-
-        # Save zip filename to environment for upload step
-        echo "MODULE_ZIP_NAME=${ZIP_FILENAME}" >> $GITHUB_ENV
-
-    # 10. Upload Build Artifact (Zip File)
-    - name: 上传构建产物
+    # 8. Upload Build Artifact (Install Directory)
+    - name: 上传构建产物 (install_dir)
       uses: actions/upload-artifact@v4
       with:
-        name: gcc-magisk-module-${{ env.TARGET_ARCH }}-${{ env.GCC_VERSION }} # Descriptive artifact name
-        path: ${{ github.workspace }}/${{ env.MODULE_ZIP_NAME }} # Path to the zip file
-        if-no-files-found: error # Fail if the zip file wasn't created
+        # Artifact name indicating it's the raw install directory
+        name: gcc-install-dir-${{ env.TARGET_ARCH }}-${{ env.GCC_VERSION }}
+        # Path to the directory to upload
+        path: ${{ env.INSTALL_PREFIX }}
+        if-no-files-found: error # Fail if the install directory is empty or missing
         retention-days: 7 # Optional: Artifact retention period
