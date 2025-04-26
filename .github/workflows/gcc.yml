@@ -89,17 +89,13 @@ jobs:
         mkdir -p "${INSTALL_PREFIX}/${LIB_DIR_NAME}"
         mkdir -p "${INSTALL_PREFIX}/include"
 
-        # --- FIX: Update PATH for the current script AND subsequent steps ---
-        # Export for the current script execution
+        # Update PATH for current script and subsequent steps
         export PATH="${NDK_TOOLCHAIN_PATH}:${INSTALL_PREFIX}/bin:${PATH}"
-        # Echo to GITHUB_ENV for subsequent steps
         echo "PATH=${PATH}" >> $GITHUB_ENV
-        # --- End FIX ---
 
-        # Update LD_LIBRARY_PATH (same principle, export then echo)
+        # Update LD_LIBRARY_PATH for current script and subsequent steps
         export LD_LIBRARY_PATH="${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}"
         echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> $GITHUB_ENV
-
 
         echo ">>> Build variables configured:"
         echo "  INSTALL_PREFIX=${INSTALL_PREFIX}"
@@ -108,9 +104,7 @@ jobs:
         echo ">>> Checking NDK Clang (${TOOLCHAIN_TARGET}-clang)..."
         if ! command -v "${TOOLCHAIN_TARGET}-clang" &> /dev/null; then
             echo "ERROR: NDK Clang (${TOOLCHAIN_TARGET}-clang) not found in PATH." >&2
-            # Add more debug info if it still fails
             echo "Search PATH: ${PATH}" >&2
-            echo "Looking in: ${NDK_TOOLCHAIN_PATH}" >&2
             ls -l "${NDK_TOOLCHAIN_PATH}" | grep clang || echo "Clang not found in NDK toolchain bin dir" >&2
             exit 1
         fi
@@ -151,69 +145,80 @@ jobs:
         echo "Detected Build Machine (Build): $BUILD_MACHINE"
         echo "Target Machine (Host/Target): $TARGET_TRIPLE"
 
-        export CC="${TOOLCHAIN_TARGET}-clang" CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${NDK_TOOLCHAIN_PATH}/llvm-ar" RANLIB="${NDK_TOOLCHAIN_PATH}/llvm-ranlib"
-        export STRIP="${NDK_TOOLCHAIN_PATH}/llvm-strip" NM="${NDK_TOOLCHAIN_PATH}/llvm-nm"
-        export OBJDUMP="${NDK_TOOLCHAIN_PATH}/llvm-objdump" READELF="${NDK_TOOLCHAIN_PATH}/llvm-readelf"
+        # --- Native Tools for Binutils Build ---
+        # Use the build machine's native compiler for configuring Binutils
+        NATIVE_CC=$(command -v gcc)
+        NATIVE_CXX=$(command -v g++)
+        NATIVE_AR=$(command -v ar)
+        NATIVE_RANLIB=$(command -v ranlib)
+        echo "Using Native CC for Binutils: ${NATIVE_CC}"
+
+        # --- Cross Tools for GMP, MPFR, MPC Build ---
+        CROSS_CC="${TOOLCHAIN_TARGET}-clang"
+        CROSS_CXX="${TOOLCHAIN_TARGET}-clang++"
+        CROSS_AR="${NDK_TOOLCHAIN_PATH}/llvm-ar"
+        CROSS_RANLIB="${NDK_TOOLCHAIN_PATH}/llvm-ranlib"
+        CROSS_STRIP="${NDK_TOOLCHAIN_PATH}/llvm-strip"
+        CROSS_NM="${NDK_TOOLCHAIN_PATH}/llvm-nm"
+        echo "Using Cross CC for Libraries: ${CROSS_CC}"
 
         # --- Build Binutils ---
-        echo ">>> Building Binutils ${BINUTILS_VERSION}..."
+        echo ">>> Building Binutils ${BINUTILS_VERSION} (using native compiler)..."
         cd binutils-${BINUTILS_VERSION}
+        # Configure using NATIVE compiler because --host is the build machine
         ./configure --target=${TARGET_TRIPLE} --host=${BUILD_MACHINE} --build=${BUILD_MACHINE} \
                     --prefix=${INSTALL_PREFIX} --with-sysroot=${NDK_SYSROOT} \
                     --disable-nls --disable-werror --disable-gprofng \
                     --enable-shared --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}"
+                    CC="${NATIVE_CC}" CXX="${NATIVE_CXX}" AR="${NATIVE_AR}" RANLIB="${NATIVE_RANLIB}" # Use NATIVE tools
         make -j${NPROC} && make install || { echo "ERROR: Binutils build failed" >&2; exit 1; }
         cd ..
         echo ">>> Binutils build complete."
 
         # --- IMPORTANT: Update PATH again for this script AND subsequent steps ---
-        # The previous step only added the *potential* bin dir. Now Binutils is actually installed.
-        # Export for the current script execution
+        # Now the actual Binutils tools are installed in ${INSTALL_PREFIX}/bin
         export PATH="${INSTALL_PREFIX}/bin:${PATH}"
-        # Echo to GITHUB_ENV for subsequent steps
         echo "PATH=${PATH}" >> $GITHUB_ENV
         echo ">>> Updated PATH to prioritize newly built Binutils: ${PATH}"
-
         if ! command -v "${TARGET_TRIPLE}-as" &> /dev/null; then
             echo "ERROR: Cannot find newly built Binutils assembler (${TARGET_TRIPLE}-as) in PATH" >&2; exit 1
         fi
-        echo ">>> New Binutils assembler found."
+        echo ">>> New Binutils assembler found: $(command -v ${TARGET_TRIPLE}-as)"
 
         # --- Build GMP ---
-        echo ">>> Building GMP ${GMP_VERSION}..."
+        echo ">>> Building GMP ${GMP_VERSION} (using cross compiler)..."
         cd gmp-${GMP_VERSION}
+        # Configure using CROSS compiler because --host is the target machine
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
                     --enable-cxx --enable-shared --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" NM="${NM}" STRIP="${STRIP}"
+                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # Use CROSS tools
         make -j${NPROC} && make install || { echo "ERROR: GMP build failed" >&2; exit 1; }
         cd ..
         echo ">>> GMP build complete."
 
         # --- Build MPFR ---
-        echo ">>> Building MPFR ${MPFR_VERSION}..."
+        echo ">>> Building MPFR ${MPFR_VERSION} (using cross compiler)..."
         cd mpfr-${MPFR_VERSION}
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
                     --with-gmp=${INSTALL_PREFIX} --enable-shared --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" NM="${NM}" STRIP="${STRIP}"
+                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # Use CROSS tools
         make -j${NPROC} && make install || { echo "ERROR: MPFR build failed" >&2; exit 1; }
         cd ..
         echo ">>> MPFR build complete."
 
         # --- Build MPC ---
-        echo ">>> Building MPC ${MPC_VERSION}..."
+        echo ">>> Building MPC ${MPC_VERSION} (using cross compiler)..."
         cd mpc-${MPC_VERSION}
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
                     --with-gmp=${INSTALL_PREFIX} --with-mpfr=${INSTALL_PREFIX} \
                     --enable-shared --disable-static \
-                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" NM="${NM}" STRIP="${STRIP}"
+                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # Use CROSS tools
         make -j${NPROC} && make install || { echo "ERROR: MPC build failed" >&2; exit 1; }
         cd ..
         echo ">>> MPC build complete."
 
         # --- Update LD_LIBRARY_PATH again for this script AND subsequent steps ---
-        # Now the actual libraries are installed.
+        # Now the actual libraries are installed in ${INSTALL_PREFIX}/${LIB_DIR_NAME}
         export LD_LIBRARY_PATH="${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}"
         echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> $GITHUB_ENV
         echo ">>> Updated LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"
@@ -237,19 +242,30 @@ jobs:
         mkdir -p build && cd build
 
         # Use tools from the updated PATH (should prioritize ${INSTALL_PREFIX}/bin)
+        # Compiler to build GCC itself (cross-compiler)
         export CC="${TOOLCHAIN_TARGET}-clang" CXX="${TOOLCHAIN_TARGET}-clang++"
+        # Binutils tools (should be the ones we built)
         export AR="${TARGET_TRIPLE}-ar" RANLIB="${TARGET_TRIPLE}-ranlib"
         export AS="${TARGET_TRIPLE}-as" LD="${TARGET_TRIPLE}-ld"
         export NM="${TARGET_TRIPLE}-nm" STRIP="${TARGET_TRIPLE}-strip"
+        # Tools for target libraries (same as above for this config)
         export AR_FOR_TARGET="${AR}" RANLIB_FOR_TARGET="${RANLIB}" AS_FOR_TARGET="${AS}" LD_FOR_TARGET="${LD}"
         export NM_FOR_TARGET="${NM}" STRIP_FOR_TARGET="${STRIP}"
         export OBJDUMP_FOR_TARGET="${TARGET_TRIPLE}-objdump"
         export READELF_FOR_TARGET="${TARGET_TRIPLE}-readelf"
+        # Compiler for build machine tools needed during build
         export CC_FOR_BUILD=$(command -v gcc) CXX_FOR_BUILD=$(command -v g++)
+        # Flags pointing to dependencies
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
         export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME} -Wl,-rpath-link=${INSTALL_PREFIX}/${LIB_DIR_NAME}"
 
         echo ">>> Configuring GCC..."
+        # Verify tools are found correctly before configure
+        echo "Using CC for GCC build: $(command -v $CC)"
+        echo "Using AS for target: $(command -v $AS_FOR_TARGET)"
+        echo "Using LD for target: $(command -v $LD_FOR_TARGET)"
+        echo "Using CC_FOR_BUILD: $(command -v $CC_FOR_BUILD)"
+
         ../configure --target=${TARGET_TRIPLE} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
                      --prefix=${INSTALL_PREFIX} --with-sysroot=${NDK_SYSROOT} \
                      --with-gmp=${INSTALL_PREFIX} --with-mpfr=${INSTALL_PREFIX} --with-mpc=${INSTALL_PREFIX} \
