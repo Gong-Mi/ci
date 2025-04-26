@@ -17,7 +17,7 @@ jobs:
       MPFR_VERSION: "4.1.0"
       MPC_VERSION: "1.2.1"
       # --- NDK Version ---
-      NDK_VERSION: "android-ndk-r28b" # Using LTS for stability
+      NDK_VERSION: "android-ndk-r26b" # Using LTS for stability
       # --- Build Target Configuration ---
       TARGET_ARCH: "aarch64"
       API_LEVEL: "30"
