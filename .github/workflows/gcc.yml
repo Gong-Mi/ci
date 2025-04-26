@@ -584,7 +584,8 @@ jobs:
 
         # 创建 module.prop 文件
         echo ">>> 创建 module.prop..."
-        cat << EOF > ${MODULE_DIR}/module.prop
+        cat << EOF > 
+${MODULE_DIR}/module.prop
 id=${MODULE_ID}
 name=${MODULE_NAME}
 version=${MODULE_VERSION}
