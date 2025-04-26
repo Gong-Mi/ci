@@ -75,7 +75,6 @@ jobs:
 
         TOOLCHAIN_TARGET="${TARGET_TRIPLE}${API_LEVEL}"
         INSTALL_PREFIX="${GITHUB_WORKSPACE}/install_dir" # Installation directory
-        # MODULE_DIR is no longer needed for this workflow
         NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
         NDK_TOOLCHAIN_PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
@@ -89,16 +88,30 @@ jobs:
         mkdir -p "${INSTALL_PREFIX}/bin"
         mkdir -p "${INSTALL_PREFIX}/${LIB_DIR_NAME}"
         mkdir -p "${INSTALL_PREFIX}/include"
-        echo "PATH=${NDK_TOOLCHAIN_PATH}:${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
+        # --- FIX: Update PATH for the current script AND subsequent steps ---
+        # Export for the current script execution
+        export PATH="${NDK_TOOLCHAIN_PATH}:${INSTALL_PREFIX}/bin:${PATH}"
+        # Echo to GITHUB_ENV for subsequent steps
+        echo "PATH=${PATH}" >> $GITHUB_ENV
+        # --- End FIX ---
+
+        # Update LD_LIBRARY_PATH (same principle, export then echo)
+        export LD_LIBRARY_PATH="${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}"
+        echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
 
         echo ">>> Build variables configured:"
         echo "  INSTALL_PREFIX=${INSTALL_PREFIX}"
-        # ... other echo statements ...
+        echo "  Current PATH for this step: ${PATH}" # Debug output
 
         echo ">>> Checking NDK Clang (${TOOLCHAIN_TARGET}-clang)..."
         if ! command -v "${TOOLCHAIN_TARGET}-clang" &> /dev/null; then
             echo "ERROR: NDK Clang (${TOOLCHAIN_TARGET}-clang) not found in PATH." >&2
+            # Add more debug info if it still fails
+            echo "Search PATH: ${PATH}" >&2
+            echo "Looking in: ${NDK_TOOLCHAIN_PATH}" >&2
+            ls -l "${NDK_TOOLCHAIN_PATH}" | grep clang || echo "Clang not found in NDK toolchain bin dir" >&2
             exit 1
         fi
         echo ">>> NDK Clang found: $(${TOOLCHAIN_TARGET}-clang --version | head -n 1)"
@@ -128,6 +141,9 @@ jobs:
         #!/bin/bash
         set -e
         echo ">>> Starting build of dependencies (cross-compiling)..."
+        # PATH and LD_LIBRARY_PATH are inherited from GITHUB_ENV set in step 4
+        echo "Build PATH: $PATH"
+        echo "Build LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
         BUILD_MACHINE=$(./gcc-${GCC_VERSION}/config.guess)
@@ -152,10 +168,14 @@ jobs:
         cd ..
         echo ">>> Binutils build complete."
 
-        # --- Update PATH for new Binutils ---
-        echo ">>> Updating PATH to prioritize newly built Binutils"
+        # --- IMPORTANT: Update PATH again for this script AND subsequent steps ---
+        # The previous step only added the *potential* bin dir. Now Binutils is actually installed.
+        # Export for the current script execution
         export PATH="${INSTALL_PREFIX}/bin:${PATH}"
-        echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
+        # Echo to GITHUB_ENV for subsequent steps
+        echo "PATH=${PATH}" >> $GITHUB_ENV
+        echo ">>> Updated PATH to prioritize newly built Binutils: ${PATH}"
+
         if ! command -v "${TARGET_TRIPLE}-as" &> /dev/null; then
             echo "ERROR: Cannot find newly built Binutils assembler (${TARGET_TRIPLE}-as) in PATH" >&2; exit 1
         fi
@@ -192,10 +212,11 @@ jobs:
         cd ..
         echo ">>> MPC build complete."
 
-        # --- Update LD_LIBRARY_PATH ---
-        echo ">>> Updating LD_LIBRARY_PATH..."
+        # --- Update LD_LIBRARY_PATH again for this script AND subsequent steps ---
+        # Now the actual libraries are installed.
         export LD_LIBRARY_PATH="${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}"
-        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+        echo ">>> Updated LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"
         echo ">>> Dependencies build step finished successfully."
 
     # 7. Build GCC (Cross-Compiled)
@@ -204,6 +225,9 @@ jobs:
         #!/bin/bash
         set -e
         echo ">>> Starting build of GCC ${GCC_VERSION}..."
+        # PATH and LD_LIBRARY_PATH are inherited from GITHUB_ENV set in step 6
+        echo "GCC Build PATH: $PATH"
+        echo "GCC Build LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
         if [ -z "$BUILD_MACHINE" ]; then echo "ERROR: BUILD_MACHINE not set." >&2; exit 1; fi
@@ -212,14 +236,15 @@ jobs:
         cd gcc-${GCC_VERSION}
         mkdir -p build && cd build
 
+        # Use tools from the updated PATH (should prioritize ${INSTALL_PREFIX}/bin)
         export CC="${TOOLCHAIN_TARGET}-clang" CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ar" RANLIB="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ranlib"
-        export AS="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as" LD="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld"
-        export NM="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-nm" STRIP="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-strip"
+        export AR="${TARGET_TRIPLE}-ar" RANLIB="${TARGET_TRIPLE}-ranlib"
+        export AS="${TARGET_TRIPLE}-as" LD="${TARGET_TRIPLE}-ld"
+        export NM="${TARGET_TRIPLE}-nm" STRIP="${TARGET_TRIPLE}-strip"
         export AR_FOR_TARGET="${AR}" RANLIB_FOR_TARGET="${RANLIB}" AS_FOR_TARGET="${AS}" LD_FOR_TARGET="${LD}"
         export NM_FOR_TARGET="${NM}" STRIP_FOR_TARGET="${STRIP}"
-        export OBJDUMP_FOR_TARGET="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-objdump"
-        export READELF_FOR_TARGET="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-readelf"
+        export OBJDUMP_FOR_TARGET="${TARGET_TRIPLE}-objdump"
+        export READELF_FOR_TARGET="${TARGET_TRIPLE}-readelf"
         export CC_FOR_BUILD=$(command -v gcc) CXX_FOR_BUILD=$(command -v g++)
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
         export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME} -Wl,-rpath-link=${INSTALL_PREFIX}/${LIB_DIR_NAME}"
