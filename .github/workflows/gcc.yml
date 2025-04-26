@@ -146,7 +146,6 @@ jobs:
         echo "Target Machine (Host/Target): $TARGET_TRIPLE"
 
         # --- Native Tools for Binutils Build ---
-        # Use the build machine's native compiler for configuring Binutils
         NATIVE_CC=$(command -v gcc)
         NATIVE_CXX=$(command -v g++)
         NATIVE_AR=$(command -v ar)
@@ -166,9 +165,11 @@ jobs:
         echo ">>> Building Binutils ${BINUTILS_VERSION} (using native compiler)..."
         cd binutils-${BINUTILS_VERSION}
         # Configure using NATIVE compiler because --host is the build machine
+        # Added --disable-libctf to avoid linking errors
         ./configure --target=${TARGET_TRIPLE} --host=${BUILD_MACHINE} --build=${BUILD_MACHINE} \
                     --prefix=${INSTALL_PREFIX} --with-sysroot=${NDK_SYSROOT} \
                     --disable-nls --disable-werror --disable-gprofng \
+                    --disable-libctf \
                     --enable-shared --disable-static \
                     CC="${NATIVE_CC}" CXX="${NATIVE_CXX}" AR="${NATIVE_AR}" RANLIB="${NATIVE_RANLIB}" # Use NATIVE tools
         make -j${NPROC} && make install || { echo "ERROR: Binutils build failed" >&2; exit 1; }
