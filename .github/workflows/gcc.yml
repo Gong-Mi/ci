@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # --- Version Configuration ---
-      GCC_VERSION: "12.2.0"
-      BINUTILS_VERSION: "2.39"
+      GCC_VERSION: "14.1.0"
+      BINUTILS_VERSION: "2.42"
       GMP_VERSION: "6.2.1"
       MPFR_VERSION: "4.1.0"
       MPC_VERSION: "1.2.1"
