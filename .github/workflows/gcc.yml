@@ -4,7 +4,7 @@ name: 构建 GCC Magisk 模块
 
 on:
   push:
-    branches: [ main ] # 或者你的开发分支
+    #branches: [ main ] # 或者你的开发分支
   workflow_dispatch: # 允许手动触发
 
 jobs:
