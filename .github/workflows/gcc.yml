@@ -9,25 +9,31 @@ jobs:
   build:
     runs-on: ubuntu-latest # 必须使用 Linux 运行环境
     env: # 定义 Job 级别的环境变量,供所有步骤共享
-      GCC_VERSION: "12.2.0"
-      BINUTILS_VERSION: "2.39"
-      GMP_VERSION: "6.2.1"
-      MPFR_VERSION: "4.1.0"
-      MPC_VERSION: "1.2.1"
-      NDK_VERSION: "android-ndk-r27c" # NDK 版本 - 已更新
-      TARGET_ARCH: "aarch64"          # 目标架构
-      API_LEVEL: "30"                 # Android API Level (可以根据需要调高)
+      # --- 版本配置 ---
+      GCC_VERSION: "12.2.0"        # 要构建的 GCC 版本
+      BINUTILS_VERSION: "2.39"     # Binutils 版本 (应与 GCC 兼容)
+      GMP_VERSION: "6.2.1"         # GNU Multiple Precision Library 版本
+      MPFR_VERSION: "4.1.0"        # Multiple Precision Floating-Point Reliable Library 版本
+      MPC_VERSION: "1.2.1"         # Multiple Precision Complex Library 版本
+      NDK_VERSION: "android-ndk-r26d" # 稳定版 NDK (r27+ 可能有路径/行为变更, r26d 相对成熟)
+      # --- 构建目标配置 ---
+      TARGET_ARCH: "aarch64"       # 目标架构 (可选: armv7a, x86, x86_64)
+      API_LEVEL: "30"              # Android API Level (建议 21 或更高, 30 是较新选择)
 
     steps:
-    - name: 检出代码 (如果你的仓库包含辅助脚本/配置)
-      uses: actions/checkout@v4 # 建议使用 v4
+    # 1. 检出代码 (如果仓库包含辅助脚本或配置文件)
+    - name: 检出代码
+      uses: actions/checkout@v4
 
+    # 2. 安装基础构建依赖
     - name: 安装基础依赖
       run: |
         #!/bin/bash
         set -e # 确保脚本在出错时退出
 
+        echo ">>> 更新 apt 包列表..."
         sudo apt-get update -qq # 使用 -qq 减少日志输出
+        echo ">>> 安装基础构建工具和库..."
         sudo apt-get install -y --no-install-recommends \
           build-essential \
           wget \
@@ -37,53 +43,75 @@ jobs:
           tar \
           xz-utils \
           texinfo \
-          rsync # 添加 rsync 用于复制文件
-        echo "基础依赖安装完成。"
+          rsync \
+          libtool \
+          pkg-config \
+          autogen \
+          automake
+        echo ">>> 基础依赖安装完成。"
 
+    # 3. 下载并设置 Android NDK
     - name: 设置 Android NDK
       id: setup-ndk
       run: |
         #!/bin/bash
         set -e # 确保脚本在出错时退出
 
-        echo "正在下载 NDK ${NDK_VERSION}..." # 使用 env 中定义的 NDK_VERSION
-        wget -q https://dl.google.com/android/repository/${NDK_VERSION}-linux.zip
-        echo "正在解压 NDK..."
+        echo ">>> 正在下载 NDK ${NDK_VERSION}..."
+        wget -q https://dl.google.com/android/repository/${NDK_VERSION}-linux.zip -O ${NDK_VERSION}-linux.zip
+        echo ">>> 正在解压 NDK (这可能需要一些时间)..."
         unzip -q ${NDK_VERSION}-linux.zip
         # 将 NDK 路径添加到后续步骤的 GitHub Actions 环境变量
         echo "ANDROID_NDK_HOME=${GITHUB_WORKSPACE}/${NDK_VERSION}" >> $GITHUB_ENV
-        echo "NDK 路径: ${GITHUB_WORKSPACE}/${NDK_VERSION}"
+        echo ">>> NDK 路径已设置: ${GITHUB_WORKSPACE}/${NDK_VERSION}"
         rm -f ${NDK_VERSION}-linux.zip # 删除压缩包节省空间
 
+    # 4. 定义和导出构建所需的变量
     - name: 定义构建特定变量
       id: build-vars
       run: |
         #!/bin/bash
         set -e # 确保脚本在出错时退出
 
-        # 从 job.env 获取 TARGET_ARCH 和 API_LEVEL
+        echo ">>> 配置构建变量..."
         echo "目标架构: ${TARGET_ARCH}"
         echo "API Level: ${API_LEVEL}"
+        echo "NDK Home: ${ANDROID_NDK_HOME}" # 从上一步的 GITHUB_ENV 获取
 
-        # 确定目标三元组
-        if [[ "${TARGET_ARCH}" == "armv7a" ]]; then
-          TARGET_TRIPLE="armv7a-linux-androideabi"
-        else
-          TARGET_TRIPLE="${TARGET_ARCH}-linux-android"
-        fi
+        # 确定目标三元组 (Target Triple)
+        case "${TARGET_ARCH}" in
+          armv7a)
+            TARGET_TRIPLE="armv7a-linux-androideabi"
+            LIB_DIR_NAME="lib"
+            ;;
+          aarch64)
+            TARGET_TRIPLE="aarch64-linux-android"
+            LIB_DIR_NAME="lib64"
+            ;;
+          x86)
+            TARGET_TRIPLE="i686-linux-android"
+            LIB_DIR_NAME="lib"
+            ;;
+          x86_64)
+            TARGET_TRIPLE="x86_64-linux-android"
+            LIB_DIR_NAME="lib64"
+            ;;
+          *)
+            echo "错误: 不支持的目标架构 '${TARGET_ARCH}'" >&2
+            exit 1
+            ;;
+        esac
 
-        # NDK Clang 通常需要 API Level 后缀
+        # NDK Clang 工具链目标 (带 API Level 后缀)
         TOOLCHAIN_TARGET="${TARGET_TRIPLE}${API_LEVEL}"
         # 临时安装目录的前缀
         INSTALL_PREFIX="${GITHUB_WORKSPACE}/install_dir"
-        # Magisk 模块目录
+        # Magisk 模块工作目录
         MODULE_DIR="${GITHUB_WORKSPACE}/gcc_magisk_module"
-        # 根据架构确定库目录名
-        if [ "${TARGET_ARCH}" == "aarch64" ] || [ "${TARGET_ARCH}" == "x86_64" ]; then
-          LIB_DIR_NAME="lib64"
-        else
-          LIB_DIR_NAME="lib"
-        fi
+        # NDK Sysroot 路径
+        NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+        # NDK 工具链路径 (Clang, llvm-ar 等)
+        NDK_TOOLCHAIN_PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
         # 将这些变量写入 GitHub Actions 环境变量供后续步骤使用
         echo "TARGET_TRIPLE=${TARGET_TRIPLE}" >> $GITHUB_ENV
@@ -91,562 +119,576 @@ jobs:
         echo "INSTALL_PREFIX=${INSTALL_PREFIX}" >> $GITHUB_ENV
         echo "MODULE_DIR=${MODULE_DIR}" >> $GITHUB_ENV
         echo "LIB_DIR_NAME=${LIB_DIR_NAME}" >> $GITHUB_ENV
+        echo "NDK_SYSROOT=${NDK_SYSROOT}" >> $GITHUB_ENV
+        echo "NDK_TOOLCHAIN_PATH=${NDK_TOOLCHAIN_PATH}" >> $GITHUB_ENV
 
-        # 将 NDK 工具链添加到全局 PATH 环境变量 (主要影响后续步骤)
-        NDK_TOOLCHAIN_PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        echo "PATH=${NDK_TOOLCHAIN_PATH}:${PATH}" >> $GITHUB_ENV
+        # 将 NDK 工具链添加到全局 PATH 环境变量 (影响后续所有步骤)
+        echo "PATH=${NDK_TOOLCHAIN_PATH}:${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
+        # 为共享库查找设置 LD_LIBRARY_PATH (主要影响 GCC 构建步骤查找 GMP/MPFR/MPC)
+        echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
 
         # 创建所需目录
-        mkdir -p $INSTALL_PREFIX
+        mkdir -p $INSTALL_PREFIX/bin
+        mkdir -p $INSTALL_PREFIX/include
+        mkdir -p $INSTALL_PREFIX/$LIB_DIR_NAME
         mkdir -p $MODULE_DIR
-        echo "构建变量设置完成。"
+        echo ">>> 构建变量设置完成。"
         echo "INSTALL_PREFIX=${INSTALL_PREFIX}"
         echo "MODULE_DIR=${MODULE_DIR}"
         echo "TARGET_TRIPLE=${TARGET_TRIPLE}"
         echo "TOOLCHAIN_TARGET=${TOOLCHAIN_TARGET}"
         echo "LIB_DIR_NAME=${LIB_DIR_NAME}"
-        echo "Initial PATH set in GITHUB_ENV: $PATH"
-        # 检查 clang 是否能找到
+        echo "NDK_SYSROOT=${NDK_SYSROOT}"
+        echo "NDK_TOOLCHAIN_PATH=${NDK_TOOLCHAIN_PATH}"
+
+        # 验证 Clang 是否在 PATH 中且可用
+        echo ">>> 检查 NDK Clang (${TOOLCHAIN_TARGET}-clang)..."
         if ! command -v "${TOOLCHAIN_TARGET}-clang" &> /dev/null; then
-            echo "错误: 无法在 PATH 中找到 NDK Clang (${TOOLCHAIN_TARGET}-clang)。请检查 NDK 安装和 PATH 设置。"
-            ls -l "${NDK_TOOLCHAIN_PATH}"
+            echo "错误: 无法在 PATH 中找到 NDK Clang (${TOOLCHAIN_TARGET}-clang)。" >&2
+            echo "当前的 PATH: ${PATH}" >&2
+            echo "检查目录: ${NDK_TOOLCHAIN_PATH}" >&2
+            ls -l "${NDK_TOOLCHAIN_PATH}" >&2
             exit 1
         fi
-        echo "NDK Clang (${TOOLCHAIN_TARGET}-clang) 已找到。"
+        echo ">>> NDK Clang 已找到: $(${TOOLCHAIN_TARGET}-clang --version | head -n 1)"
 
-    - name: 下载源代码 (使用 env 中的版本号)
+    # 5. 下载所有源代码
+    - name: 下载源代码
       run: |
         #!/bin/bash
         set -e # 确保脚本在出错时退出
 
-        echo "正在下载源码..."
+        echo ">>> 正在下载源码..."
         echo "GCC Version: ${GCC_VERSION}"
-        echo "Binutils Version: ${BINUTILS_VERSION}"
-        echo "GMP Version: ${GMP_VERSION}"
-        echo "MPFR Version: ${MPFR_VERSION}"
-        echo "MPC Version: ${MPC_VERSION}"
         wget -q https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.gz
+        echo "Binutils Version: ${BINUTILS_VERSION}"
         wget -q https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.gz
+        echo "GMP Version: ${GMP_VERSION}"
         wget -q https://ftp.gnu.org/gnu/gmp/gmp-${GMP_VERSION}.tar.xz
+        echo "MPFR Version: ${MPFR_VERSION}"
         wget -q https://ftp.gnu.org/gnu/mpfr/mpfr-${MPFR_VERSION}.tar.xz
+        echo "MPC Version: ${MPC_VERSION}"
         wget -q https://ftp.gnu.org/gnu/mpc/mpc-${MPC_VERSION}.tar.gz
-        echo "下载完成,正在解压..."
+        echo ">>> 下载完成, 正在解压..."
         tar -xf gcc-${GCC_VERSION}.tar.gz
         tar -xf binutils-${BINUTILS_VERSION}.tar.gz
         tar -xf gmp-${GMP_VERSION}.tar.xz
         tar -xf mpfr-${MPFR_VERSION}.tar.xz
         tar -xf mpc-${MPC_VERSION}.tar.gz
-        echo "解压完成。"
-        echo "当前工作目录内容 (下载后):"
-        ls -l # 列出文件以确认解压成功
+        echo ">>> 解压完成。"
+        echo "当前工作目录内容:"
+        ls -l
 
+    # 6. 构建依赖项 (Binutils, GMP, MPFR, MPC) - 交叉编译
     - name: 构建依赖项 (Binutils, GMP, MPFR, MPC)
       run: |
         #!/bin/bash
         set -e # 确保脚本在出错时退出
 
-        echo "开始构建依赖项..."
-        echo "Current PATH for dependency build: $PATH"
-        echo "Current work dir: $(pwd)"
-        ls -l
-
+        echo ">>> 开始构建依赖项 (交叉编译)..."
+        echo "构建使用的 PATH: $PATH"
+        echo "当前工作目录: $(pwd)"
         NPROC=$(nproc)
-        echo "Using $NPROC parallel jobs for make."
+        echo "使用 $NPROC 个并行作业进行 make。"
 
-        # --- 确定构建机器类型 ---
-        # 先运行一次 config.guess 并保存结果
-        cd binutils-${BINUTILS_VERSION} # 需要在包含 config.guess 的目录中
-        if [ ! -x ./config.guess ]; then
-            echo "Error: ./config.guess 在 $(pwd) 中未找到或不可执行"
-            # 如有必要，可尝试在其他地方查找或修复权限
-            # 暂时假设它存在于解压后的目录中
-            chmod +x ./config.guess || true # 尝试赋予执行权限以防万一
-            if [ ! -x ./config.guess ]; then exit 1; fi # 如果仍然不可执行则退出
-        fi
-        BUILD_MACHINE=$(./config.guess)
-        # !!!!!!!!!! 添加 export !!!!!!!!!
-        export BUILD_MACHINE
-        # !!!!!!!!!! 添加 export !!!!!!!!!
+        # --- 确定构建机器类型 (Build Machine) ---
+        # config.guess 通常在源码根目录
+        BUILD_MACHINE=$(./gcc-${GCC_VERSION}/config.guess)
         if [ -z "$BUILD_MACHINE" ]; then
-            echo "Error: config.guess 未能确定构建机器的三元组 (triplet)。"
+            echo "错误: config.guess 未能确定构建机器的三元组。" >&2
             exit 1
         fi
-        echo "检测到的构建机器: $BUILD_MACHINE"
-        cd .. # 返回上级目录
+        export BUILD_MACHINE # 导出供 configure 使用
+        echo "检测到的构建机器 (Build): $BUILD_MACHINE"
+        echo "目标机器 (Host/Target): $TARGET_TRIPLE"
 
-        # --- 构建 Binutils ---
-        echo "构建 Binutils (版本: ${BINUTILS_VERSION})..."
-        cd binutils-${BINUTILS_VERSION}
-
-        # Binutils 需要在构建机器上运行，但目标是 Android 机器
+        # --- 设置交叉编译工具 ---
+        # 使用 NDK Clang 和 LLVM 工具
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-        export NM="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+        export AR="${NDK_TOOLCHAIN_PATH}/llvm-ar"
+        export RANLIB="${NDK_TOOLCHAIN_PATH}/llvm-ranlib"
+        export STRIP="${NDK_TOOLCHAIN_PATH}/llvm-strip"
+        export NM="${NDK_TOOLCHAIN_PATH}/llvm-nm"
+        export OBJDUMP="${NDK_TOOLCHAIN_PATH}/llvm-objdump"
+        export READELF="${NDK_TOOLCHAIN_PATH}/llvm-readelf"
+        # AS 和 LD 将由 Binutils 提供 (构建后)
 
-        echo "检查 Binutils 所需工具:"
-        echo "CC is: $CC"
-        $CC --version || { echo "CC check failed"; exit 1; }
-        echo "AR is: $AR"
-        ls -l "$AR"
-        "$AR" --version || { echo "AR version check failed"; exit 1; }
-        echo "NM is: $NM"
-        ls -l "$NM"
-        "$NM" --version || { echo "NM version check failed"; exit 1; }
+        echo ">>> 检查交叉编译工具..."
+        echo "CC: $($CC --version | head -n 1)"
+        echo "CXX: $($CXX --version | head -n 1)"
+        echo "AR: $($AR --version)"
+        echo "RANLIB: $($RANLIB --version)"
 
-
-        echo "--- 准备配置 Binutils ---"
-        echo "PWD=$(pwd)" # 保留 PWD 输出用于调试
-        ls -l ./configure
-        if [ ! -x ./configure ]; then
-           echo "错误: configure脚本不存在或不可执行！"
-           exit 1
-        fi
-        echo "即将运行 Configure 命令。"
-
-        # 执行 Binutils 的 configure: host 是构建机器, target 是 android 机器
-        # 使用前面捕获的 BUILD_MACHINE 变量
-        # 此时 BUILD_MACHINE 已经是环境变量了
-        ./configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
-                    --host=${BUILD_MACHINE} \  # 使用变量
-                    --build=${BUILD_MACHINE} \ # 使用变量
-                    --with-sysroot=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
-                    --disable-nls --disable-werror \
-                    --disable-libctf \
+        # --- 构建 Binutils (for Target) ---
+        echo ">>> 构建 Binutils ${BINUTILS_VERSION} (for ${TARGET_TRIPLE})..."
+        cd binutils-${BINUTILS_VERSION}
+        # Binutils 需要在构建机器上运行 (--host), 但生成目标机器的工具 (--target)
+        ./configure --target=${TARGET_TRIPLE} \
+                    --host=${BUILD_MACHINE} \
+                    --build=${BUILD_MACHINE} \
+                    --prefix=${INSTALL_PREFIX} \
+                    --with-sysroot=${NDK_SYSROOT} \
+                    --disable-nls \
+                    --disable-werror \
                     --disable-gprofng \
-                    --disable-static --enable-shared
+                    --enable-shared \
+                    --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" # 明确传递工具
 
-        echo "运行 Binutils configure 完成。开始 make..."
-        make -j${NPROC} || { echo "Binutils make failed"; exit 1; }
-        make install || { echo "Binutils make install failed"; exit 1; }
-        echo "Binutils 构建和安装完成。"
+        echo "--- Binutils: make ---"
+        make -j${NPROC} || { echo "错误: Binutils make 失败" >&2; exit 1; }
+        echo "--- Binutils: make install ---"
+        make install || { echo "错误: Binutils make install 失败" >&2; exit 1; }
+        echo ">>> Binutils 构建和安装完成。"
         cd ..
         echo "检查 Binutils 安装情况于 ${INSTALL_PREFIX}/bin:"
-        ls -l ${INSTALL_PREFIX}/bin | grep ${TARGET_TRIPLE} || echo "警告: Binutils 工具可能未正确安装。"
-        # 检查原生工具是否被构建 (使用 --host=build 时不应构建) - 添加 || true 防止 grep 找不到时报错
-        ls -l ${INSTALL_PREFIX}/bin | grep "$(echo $BUILD_MACHINE | sed 's/-pc-linux-gnu//')" || true
+        ls -l ${INSTALL_PREFIX}/bin | grep ${TARGET_TRIPLE} || echo "警告: Binutils 工具 (${TARGET_TRIPLE}-*) 可能未正确安装。"
 
-        # --- 构建 GMP ---
-        echo "构建 GMP (版本: ${GMP_VERSION})..."
+        # --- 将新构建的 Binutils 添加到 PATH (优先使用) ---
+        echo ">>> 更新 PATH 以包含新构建的 Binutils"
+        export PATH="${INSTALL_PREFIX}/bin:${PATH}"
+        echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV # 确保后续步骤也能看到
+        echo "更新后的 PATH: $PATH"
+        echo ">>> 检查新 Binutils 工具 (${TARGET_TRIPLE}-as)..."
+        if ! command -v "${TARGET_TRIPLE}-as" &> /dev/null; then
+            echo "错误: 无法找到新构建的 Binutils 工具 (${TARGET_TRIPLE}-as)" >&2
+            exit 1
+        fi
+        echo ">>> 新 Binutils 工具已找到: $(${TARGET_TRIPLE}-as --version)"
+
+        # --- 构建 GMP (for Target) ---
+        echo ">>> 构建 GMP ${GMP_VERSION} (for ${TARGET_TRIPLE})..."
         cd gmp-${GMP_VERSION}
-        # GMP 需要在 ANDROID 机器上运行 (host)，使用交叉编译器构建
-        export CC="${TOOLCHAIN_TARGET}-clang"
-        export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" # 仍需构建机器的工具
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-         # 确保第一步安装的 Binutils 中的 'as', 'ld' 等能被找到
-        export PATH="${INSTALL_PREFIX}/bin:${PATH}" # 确保交叉 binutils 在 PATH 中
-        echo "用于 GMP 构建的当前 PATH: $PATH"
+        # GMP 库需要在目标机器上运行 (--host)
+        ./configure --prefix=${INSTALL_PREFIX} \
+                    --host=${TARGET_TRIPLE} \
+                    --build=${BUILD_MACHINE} \
+                    --enable-cxx \
+                    --enable-shared \
+                    --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" \
+                    NM="${NM}" STRIP="${STRIP}" # 传递工具
 
-        # 为清晰起见，显式设置 --build，host 是目标系统
-        # BUILD_MACHINE 此时是环境变量，configure 会读取到
-        ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
-                     --build=${BUILD_MACHINE} \ # 添加显式的构建机器
-                     --enable-cxx \
-                     --disable-static --enable-shared
-        echo "运行 GMP configure 完成。开始 make..."
-        make -j${NPROC} || { echo "GMP make failed"; exit 1; }
-        make install || { echo "GMP make install failed"; exit 1; }
-        echo "GMP 构建和安装完成。"
+        echo "--- GMP: make ---"
+        make -j${NPROC} || { echo "错误: GMP make 失败" >&2; exit 1; }
+        echo "--- GMP: make install ---"
+        make install || { echo "错误: GMP make install 失败" >&2; exit 1; }
+        echo ">>> GMP 构建和安装完成。"
         cd ..
-        echo "检查 GMP 安装情况于 ${INSTALL_PREFIX}/include 和 ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
-        ls -l ${INSTALL_PREFIX}/include/gmp*.h || echo "警告: GMP 头文件可能未正确安装。"
-        ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgmp.* || echo "警告: GMP 库可能未正确安装。"
+        echo "检查 GMP 安装情况:"
+        ls -l ${INSTALL_PREFIX}/include/gmp*.h ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgmp.* || echo "警告: GMP 文件可能未正确安装。"
 
-        # --- 构建 MPFR ---
-        echo "构建 MPFR (版本: ${MPFR_VERSION})..."
+        # --- 构建 MPFR (for Target) ---
+        echo ">>> 构建 MPFR ${MPFR_VERSION} (for ${TARGET_TRIPLE})..."
         cd mpfr-${MPFR_VERSION}
-        # MPFR 需要在 ANDROID 机器上运行 (host)，使用交叉编译器构建
-        export CC="${TOOLCHAIN_TARGET}-clang"
-        export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" # 仍需构建机器的工具
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-        # PATH 应该仍然包含交叉 binutils
-
-        # 为清晰起见，显式设置 --build，host 是目标系统
-        # BUILD_MACHINE 此时是环境变量
-        ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
-                    --build=${BUILD_MACHINE} \ # 添加显式的构建机器
+        ./configure --prefix=${INSTALL_PREFIX} \
+                    --host=${TARGET_TRIPLE} \
+                    --build=${BUILD_MACHINE} \
                     --with-gmp=${INSTALL_PREFIX} \
-                    --disable-static --enable-shared
-        echo "运行 MPFR configure 完成。开始 make..."
-        make -j${NPROC} || { echo "MPFR make failed"; exit 1; }
-        make install || { echo "MPFR make install failed"; exit 1; }
-        echo "MPFR 构建和安装完成。"
+                    --enable-shared \
+                    --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" \
+                    NM="${NM}" STRIP="${STRIP}"
+
+        echo "--- MPFR: make ---"
+        make -j${NPROC} || { echo "错误: MPFR make 失败" >&2; exit 1; }
+        echo "--- MPFR: make install ---"
+        make install || { echo "错误: MPFR make install 失败" >&2; exit 1; }
+        echo ">>> MPFR 构建和安装完成。"
         cd ..
-        echo "检查 MPFR 安装情况于 ${INSTALL_PREFIX}/include 和 ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
-        ls -l ${INSTALL_PREFIX}/include/mpfr.h || echo "警告: MPFR 头文件可能未正确安装。"
-        ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpfr.* || echo "警告: MPFR 库可能未正确安装。"
+        echo "检查 MPFR 安装情况:"
+        ls -l ${INSTALL_PREFIX}/include/mpfr.h ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpfr.* || echo "警告: MPFR 文件可能未正确安装。"
 
-        # --- 构建 MPC ---
-        echo "构建 MPC (版本: ${MPC_VERSION})..."
+        # --- 构建 MPC (for Target) ---
+        echo ">>> 构建 MPC ${MPC_VERSION} (for ${TARGET_TRIPLE})..."
         cd mpc-${MPC_VERSION}
-        # MPC 需要在 ANDROID 机器上运行 (host)，使用交叉编译器构建
-        export CC="${TOOLCHAIN_TARGET}-clang"
-        export CXX="${TOOLCHAIN_TARGET}-clang++"
-        export AR="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" # 仍需构建机器的工具
-        export RANLIB="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
-        export STRIP="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-        # PATH 应该仍然包含交叉 binutils
-
-        # 为清晰起见，显式设置 --build，host 是目标系统
-        # BUILD_MACHINE 此时是环境变量
-        ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} \
-                    --build=${BUILD_MACHINE} \ # 添加显式的构建机器
+        ./configure --prefix=${INSTALL_PREFIX} \
+                    --host=${TARGET_TRIPLE} \
+                    --build=${BUILD_MACHINE} \
                     --with-gmp=${INSTALL_PREFIX} \
                     --with-mpfr=${INSTALL_PREFIX} \
-                    --disable-static --enable-shared
-        echo "运行 MPC configure 完成。开始 make..."
-        make -j${NPROC} || { echo "MPC make failed"; exit 1; }
-        make install || { echo "MPC make install failed"; exit 1; }
-        echo "MPC 构建和安装完成。"
+                    --enable-shared \
+                    --disable-static \
+                    CC="${CC}" CXX="${CXX}" AR="${AR}" RANLIB="${RANLIB}" \
+                    NM="${NM}" STRIP="${STRIP}"
+
+        echo "--- MPC: make ---"
+        make -j${NPROC} || { echo "错误: MPC make 失败" >&2; exit 1; }
+        echo "--- MPC: make install ---"
+        make install || { echo "错误: MPC make install 失败" >&2; exit 1; }
+        echo ">>> MPC 构建和安装完成。"
         cd ..
-        echo "检查 MPC 安装情况于 ${INSTALL_PREFIX}/include 和 ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
-        ls -l ${INSTALL_PREFIX}/include/mpc.h || echo "警告: MPC 头文件可能未正确安装。"
-        ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.* || echo "警告: MPC 库可能未正确安装。"
+        echo "检查 MPC 安装情况:"
+        ls -l ${INSTALL_PREFIX}/include/mpc.h ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libmpc.* || echo "警告: MPC 文件可能未正确安装。"
 
-        # 为后续步骤将最终安装路径添加到 PATH (确保添加)
-        echo "为后续步骤将 ${INSTALL_PREFIX}/bin 添加到 PATH (再次确保)"
-        echo "PATH=${INSTALL_PREFIX}/bin:${PATH}" >> $GITHUB_ENV
-        # 为后续步骤将库路径添加到 LD_LIBRARY_PATH
-        echo "为后续步骤将 ${INSTALL_PREFIX}/${LIB_DIR_NAME} 添加到 LD_LIBRARY_PATH"
+        # 更新 LD_LIBRARY_PATH 供 GCC configure/make 查找
+        echo ">>> 更新 LD_LIBRARY_PATH 以包含新构建的库"
+        export LD_LIBRARY_PATH="${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}"
         echo "LD_LIBRARY_PATH=${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
-        echo "依赖项构建步骤完成。"
+        echo "更新后的 LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
+        echo ">>> 依赖项构建步骤完成。"
+
+    # 7. 构建 GCC (交叉编译)
     - name: 构建 GCC
       run: |
         #!/bin/bash
         set -e # 确保脚本在出错时退出
 
-        echo "开始构建 GCC (版本: ${GCC_VERSION})..."
-        # PATH 现在应包含上一步安装的交叉 Binutils
-        echo "用于 GCC 构建的当前 PATH: $PATH"
-        echo "用于 GCC 构建的当前 LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-        # 确定构建机器类型（如果之前的步骤没有设置 BUILD_MACHINE 全局变量，则需要再次获取）
-        # 为了安全起见，再次获取并检查 (应该已经 export 了)
-        if [ -z "$BUILD_MACHINE" ]; then
-            cd gcc-${GCC_VERSION} # 需要 config.guess
-            if [ ! -x ./config.guess ]; then
-                echo "Error: ./config.guess 在 $(pwd) 中未找到或不可执行"
-                chmod +x ./config.guess || true
-                if [ ! -x ./config.guess ]; then exit 1; fi
-            fi
-            BUILD_MACHINE=$(./config.guess)
-            export BUILD_MACHINE # 确保导出
-            cd ..
-            if [ -z "$BUILD_MACHINE" ]; then
-                echo "Error: config.guess 未能确定构建机器的三元组 (triplet)。"
-                exit 1
-            fi
-            echo "再次检测到的构建机器: $BUILD_MACHINE"
-        fi
-
-        cd gcc-${GCC_VERSION}
-        # 推荐在 build 目录中构建
-        mkdir build && cd build
-
+        echo ">>> 开始构建 GCC ${GCC_VERSION} (for ${TARGET_TRIPLE})..."
+        # PATH 应包含 NDK 工具链和刚构建的 Binutils
+        # LD_LIBRARY_PATH 应包含刚构建的 GMP/MPFR/MPC 库
+        echo "GCC 构建使用的 PATH: $PATH"
+        echo "GCC 构建使用的 LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
         NPROC=$(nproc)
         echo "使用 $NPROC 个并行作业进行 make。"
 
-        # GCC 需要在 ANDROID 机器上运行 (host) 并以 ANDROID 机器为目标 (target)
-        # 它是从构建机器交叉编译的。
-        # 使用上一步安装的交叉 Binutils (应该在 PATH 中)
-        # 使用 NDK Clang 作为第一阶段编译器
-
-        # 最终编译器的工具 (这些是将被构建的)
-        # 确保它们不会意外地拾取系统工具
-        # 注意：这里使用我们构建的 binutils 工具（应该在 PATH 里）
-        export AS_FOR_TARGET="${TARGET_TRIPLE}-as"
-        export LD_FOR_TARGET="${TARGET_TRIPLE}-ld"
-        export AR_FOR_TARGET="${TARGET_TRIPLE}-ar"
-        export RANLIB_FOR_TARGET="${TARGET_TRIPLE}-ranlib"
-        export STRIP_FOR_TARGET="${TARGET_TRIPLE}-strip"
-        export NM_FOR_TARGET="${TARGET_TRIPLE}-nm"
-        export OBJDUMP_FOR_TARGET="${TARGET_TRIPLE}-objdump"
-        export READELF_FOR_TARGET="${TARGET_TRIPLE}-readelf"
+        # --- 获取构建机器 (Build Machine) ---
+        # 再次获取以确保安全 (虽然上一步已 export)
+        if [ -z "$BUILD_MACHINE" ]; then # BUILD_MACHINE 应该从 env 继承
+          BUILD_MACHINE=$(./gcc-${GCC_VERSION}/config.guess)
+          export BUILD_MACHINE
+        fi
+         if [ -z "$BUILD_MACHINE" ]; then
+            echo "错误: 无法确定构建机器。" >&2
+            exit 1
+         fi
+        echo "构建机器 (Build): $BUILD_MACHINE"
+        echo "主机机器 (Host): $TARGET_TRIPLE"
+        echo "目标机器 (Target): $TARGET_TRIPLE"
 
 
-        # 设置用于 *构建* GCC 本身的编译器的环境变量
-        # 这些应该是 NDK Clang (因为 build != host)
+        cd gcc-${GCC_VERSION}
+        # 推荐在 build 目录中构建
+        mkdir -p build && cd build
+
+        # --- 设置 GCC 构建工具 ---
+        # 用于构建 GCC *本身* 的编译器 (交叉编译器, 因为 build != host)
         export CC="${TOOLCHAIN_TARGET}-clang"
         export CXX="${TOOLCHAIN_TARGET}-clang++"
+        # 使用我们之前构建的交叉 Binutils 工具
+        export AR="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ar"
+        export RANLIB="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ranlib"
+        export AS="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-as"
+        export LD="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-ld"
+        export NM="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-nm"
+        export STRIP="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-strip"
 
-        # 设置用于构建 GCC 构建过程中所需的主机工具的编译器 (原生编译器)
+        # 用于构建 GCC 运行时库 (libgcc, libstdc++) 的工具 (目标工具)
+        export AR_FOR_TARGET="${AR}"
+        export RANLIB_FOR_TARGET="${RANLIB}"
+        export AS_FOR_TARGET="${AS}"
+        export LD_FOR_TARGET="${LD}"
+        export NM_FOR_TARGET="${NM}"
+        export STRIP_FOR_TARGET="${STRIP}"
+        export OBJDUMP_FOR_TARGET="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-objdump"
+        export READELF_FOR_TARGET="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-readelf"
+
+        # 用于构建 GCC 构建过程中需要的 *主机* 工具 (原生编译器)
         export CC_FOR_BUILD=$(command -v gcc)
         export CXX_FOR_BUILD=$(command -v g++)
 
-        # LDFLAGS 指向安装的库目录
-        export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME} -Wl,-rpath-link=${INSTALL_PREFIX}/${LIB_DIR_NAME}" # 添加 rpath-link 可能有帮助
-        # CPPFLAGS 指向安装的头文件目录
+        # 指向依赖项的头文件和库
         export CPPFLAGS="-I${INSTALL_PREFIX}/include"
-        # NDK Sysroot 路径
-        NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-        # Linker 可能需要显式的 sysroot 来查找运行时库? 如果需要则添加
-        # 对于目标文件的链接选项
-        export LDFLAGS_FOR_TARGET="-L${INSTALL_PREFIX}/${LIB_DIR_NAME} --sysroot=${NDK_SYSROOT}"
-        # 对于目标文件的编译选项
-        export CFLAGS_FOR_TARGET="--sysroot=${NDK_SYSROOT}" # GCC configure 通常会处理这个
-        export CXXFLAGS_FOR_TARGET="--sysroot=${NDK_SYSROOT}" # GCC configure 通常会处理这个
+        # 需要 rpath-link 确保 configure/make 期间链接器能找到共享库
+        export LDFLAGS="-L${INSTALL_PREFIX}/${LIB_DIR_NAME} -Wl,-rpath-link=${INSTALL_PREFIX}/${LIB_DIR_NAME}"
 
-        echo "Using build compiler: CC_FOR_BUILD=$CC_FOR_BUILD CXX_FOR_BUILD=$CXX_FOR_BUILD"
-        echo "Using cross compiler: CC=$CC CXX=$CXX"
-        echo "Using target tools: AR_FOR_TARGET=$AR_FOR_TARGET etc."
-        echo "CPPFLAGS for GCC build: $CPPFLAGS"
-        echo "LDFLAGS for GCC build: $LDFLAGS"
-        echo "LDFLAGS_FOR_TARGET for target libs: $LDFLAGS_FOR_TARGET"
+        echo ">>> 检查 GCC 构建工具..."
+        echo "CC (cross): $($CC --version | head -n 1)"
+        echo "AS_FOR_TARGET: $($AS_FOR_TARGET --version)"
+        echo "LD_FOR_TARGET: $($LD_FOR_TARGET --version)"
+        echo "CC_FOR_BUILD (native): $($CC_FOR_BUILD --version | head -n 1)"
 
-        # 检查将由 GCC configure/make 使用的工具
-        echo "检查交叉编译器:"
-        "$CC" --version || { echo "CC check failed"; exit 1; }
-        echo "检查目标链接器:"
-        command -v "$LD_FOR_TARGET" || { echo "LD_FOR_TARGET command not found"; exit 1; }
-        "$LD_FOR_TARGET" --version || { echo "LD_FOR_TARGET version check failed"; exit 1; }
-
-
-        echo "--- 准备配置 GCC ---"
-        echo "PWD=$(pwd)"
-        ls -l ../configure # configure 在父目录
-        if [ ! -x ../configure ]; then
-           echo "错误: configure脚本不存在或不可执行！"
-           exit 1
-        fi
-        echo "即将运行 Configure 命令。"
-
-        # 执行 GCC 的 configure: build 在构建机, host 在目标机, target 是目标机
-        # 需要指向前一步安装的 Binutils (通过 PATH 和 --with-binutils)
-        # 使用正确的 build, host, target (BUILD_MACHINE 应该是环境变量了)
-        ../configure --target=${TARGET_TRIPLE} --prefix=${INSTALL_PREFIX} \
-                    --host=${TARGET_TRIPLE} \    # <--- Host 是目标 Android 机 (编译器将在此运行)
-                    --build=${BUILD_MACHINE} \   # <--- Build 是构建机 (我们正在编译的地方)
-                    --with-sysroot="${NDK_SYSROOT}" \
-                    --with-gmp="${INSTALL_PREFIX}" \
-                    --with-mpfr="${INSTALL_PREFIX}" \
-                    --with-mpc="${INSTALL_PREFIX}" \
-                    --with-binutils="${INSTALL_PREFIX}/bin" \ # 明确告知 binutils 安装位置
-                    --with-native-system-header-dir=/system/include # 指向 Android 系统头文件目录
-                    --enable-languages=c,c++ \
-                    --enable-shared \
-                    --disable-static \
-                    --disable-nls \
-                    --disable-bootstrap \            # 禁用 bootstrap 加速构建
-                    --disable-multilib \
-                    --disable-libsanitizer \
-                    --disable-libssp \
-                    --disable-libgomp \
-                    --disable-libquadmath \
-                    --disable-libatomic \
-                    --disable-libvtv \
-                    --disable-gold # Android 上通常不用 gold
-                    --enable-initfini-array \
-                    --enable-host-shared \           # 如果需要构建宿主工具为共享库
-                     # 传递环境变量可能有助于 configure 正确识别工具
+        echo ">>> 配置 GCC..."
+        ../configure --target=${TARGET_TRIPLE} \
+                     --host=${TARGET_TRIPLE} \
+                     --build=${BUILD_MACHINE} \
+                     --prefix=${INSTALL_PREFIX} \
+                     --with-sysroot=${NDK_SYSROOT} \
+                     --with-gmp=${INSTALL_PREFIX} \
+                     --with-mpfr=${INSTALL_PREFIX} \
+                     --with-mpc=${INSTALL_PREFIX} \
+                     --with-binutils=${INSTALL_PREFIX}/bin \ # 明确告知 binutils 位置
+                     --with-native-system-header-dir=/system/usr/include # Android 系统头文件通常在这个路径下 (相对 sysroot)
+                     --enable-languages=c,c++ \
+                     --enable-shared \      # 构建共享的 libgcc, libstdc++
+                     --disable-static \     # 不构建静态版本 (减少大小)
+                     --disable-nls \        # 禁用 Native Language Support
+                     --disable-bootstrap \  # 禁用 Bootstrap 构建 (加速)
+                     --disable-multilib \   # Android 通常是单库
+                     --disable-libsanitizer \ # 禁用 sanitizers
+                     --disable-libssp \     # 禁用 Stack Smashing Protector (Android 有自己的机制)
+                     --disable-libgomp \    # 禁用 OpenMP
+                     --disable-libquadmath \ # 禁用 四倍精度数学库
+                     --disable-libatomic \  # 使用 NDK 提供的 atomic 操作
+                     --disable-libvtv \     # 禁用 VTV
+                     --disable-gold \       # 不使用 gold linker
+                     --enable-initfini-array \ # 使用 .init_array/.fini_array
+                     --enable-fix-cortex-a53-835769 --enable-fix-cortex-a53-843419 # AArch64 特定的 errata 修复
+                     --enable-host-shared # 如果需要构建宿主工具为共享库 (一般不需要)
+                     # 传递环境变量确保 configure 正确识别
                      CC="${CC}" CXX="${CXX}" \
-                     CC_FOR_BUILD="${CC_FOR_BUILD}" CXX_FOR_BUILD="${CXX_FOR_BUILD}" \
+                     AR="${AR}" RANLIB="${RANLIB}" \
+                     AS="${AS}" LD="${LD}" NM="${NM}" STRIP="${STRIP}" \
                      AR_FOR_TARGET="${AR_FOR_TARGET}" RANLIB_FOR_TARGET="${RANLIB_FOR_TARGET}" \
+                     AS_FOR_TARGET="${AS_FOR_TARGET}" LD_FOR_TARGET="${LD_FOR_TARGET}" \
                      NM_FOR_TARGET="${NM_FOR_TARGET}" STRIP_FOR_TARGET="${STRIP_FOR_TARGET}" \
                      OBJDUMP_FOR_TARGET="${OBJDUMP_FOR_TARGET}" READELF_FOR_TARGET="${READELF_FOR_TARGET}" \
-                     AS_FOR_TARGET="${AS_FOR_TARGET}" LD_FOR_TARGET="${LD_FOR_TARGET}" \
-                     CPPFLAGS="${CPPFLAGS}" LDFLAGS="${LDFLAGS}" \
-                     LDFLAGS_FOR_TARGET="${LDFLAGS_FOR_TARGET}" # CFLAGS/CXXFLAGS_FOR_TARGET 通常由 --with-sysroot 处理
+                     CC_FOR_BUILD="${CC_FOR_BUILD}" CXX_FOR_BUILD="${CXX_FOR_BUILD}" \
+                     CPPFLAGS="${CPPFLAGS}" LDFLAGS="${LDFLAGS}"
 
-        echo "运行 GCC configure 完成。开始 make..."
-        # GCC make 可能需要很长时间！
-        make -j${NPROC} || { echo "GCC make failed"; exit 1; }
-        # 只安装目标工具，而不是原生工具
-        make install-strip || { echo "GCC make install failed"; exit 1; } # 使用 install-strip 减小大小
+        echo ">>> 运行 GCC make (这可能需要很长时间)..."
+        make -j${NPROC} || { echo "错误: GCC make 失败" >&2; exit 1; }
 
-        echo "GCC 构建和安装完成。"
+        echo ">>> 运行 GCC make install-strip (安装并精简)..."
+        # 使用 install-strip 减小安装大小
+        make install-strip || { echo "错误: GCC make install 失败" >&2; exit 1; }
+
+        echo ">>> GCC 构建和安装完成。"
         cd ../.. # 返回到源码根目录
         echo "检查 GCC 安装情况于 ${INSTALL_PREFIX}/bin:"
-        ls -l ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc || echo "警告: GCC 编译器可能未正确安装。"
+        ls -l ${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-gcc || echo "警告: GCC 编译器 (${TARGET_TRIPLE}-gcc) 可能未正确安装。"
+        echo "检查 GCC 运行时库于 ${INSTALL_PREFIX}/${LIB_DIR_NAME}:"
+        ls -l ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libstdc++.so* ${INSTALL_PREFIX}/${LIB_DIR_NAME}/libgcc_s.so* || echo "警告: GCC 运行时库可能未正确安装。"
 
+    # 8. 创建 Magisk 模块结构并复制文件
     - name: 创建 Magisk 模块结构
       run: |
         #!/bin/bash
         set -e # 确保脚本在出错时退出
 
-        echo "创建 Magisk 模块结构..."
+        echo ">>> 创建 Magisk 模块结构..."
         MODULE_ID="gcc-cross-android-${TARGET_ARCH}"
-        MODULE_NAME="GCC for Android (${TARGET_ARCH})"
+        MODULE_NAME="GCC ${GCC_VERSION} for Android (${TARGET_ARCH})"
         MODULE_VERSION="v${GCC_VERSION}"
+        # 生成一个基于日期的 versionCode (YYYYMMDD), 或者使用 GCC 版本号
+        MODULE_VERSION_CODE=$(echo $GCC_VERSION | awk -F. '{ printf "%d%02d%02d\n", $1, $2, $3 }')
         MODULE_AUTHOR="GitHub Actions CI ($(date +%Y%m%d))"
+        MODULE_DESCRIPTION="GCC ${GCC_VERSION} toolchain (C/C++) built for Android ${TARGET_ARCH}. Installs to /system. Built by GitHub Actions CI."
 
         # --- 创建目录结构 ---
         echo "创建模块目录于 ${MODULE_DIR}"
         mkdir -p ${MODULE_DIR}/system/bin
         mkdir -p ${MODULE_DIR}/system/${LIB_DIR_NAME}
-        # GCC 内部文件路径
+        # GCC 内部文件路径 (libexec, include, lib/gcc)
         mkdir -p ${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}
-        mkdir -p ${MODULE_DIR}/system/lib/gcc/${TARGET_TRIPLE}/${GCC_VERSION}
-        # GCC 可能需要的 include 目录 (C++ 标准库头文件等)
         mkdir -p ${MODULE_DIR}/system/include/c++/${GCC_VERSION}
+        mkdir -p ${MODULE_DIR}/system/lib/gcc/${TARGET_TRIPLE}/${GCC_VERSION}
         # Magisk 元数据目录
         mkdir -p ${MODULE_DIR}/META-INF/com/google/android
 
-        echo "复制已安装的文件到模块目录..."
+        echo ">>> 复制已安装的文件到模块目录..."
+
+        # 辅助函数，带详细输出和错误检查
         copy_verbose() {
-            local src="$1"
-            local dest="$2"
-            echo "  复制: ${src} -> ${dest}"
-            # 使用 -a 保持权限和符号链接，-L 复制符号链接指向的实际文件
-            cp -aL "${src}" "${dest}" || { echo "错误: 无法复制 '$1' 到 '$2'. 安装步骤可能失败。"; exit 1; }
+          local src="$1"
+          local dest="$2"
+          if [ ! -e "$src" ]; then
+            echo "警告: 源文件 '$src' 不存在, 跳过复制。" >&2
+            return 1 # 返回非零表示有问题
+          fi
+          echo "  复制: ${src} -> ${dest}"
+          # 使用 -a 保持权限和符号链接, -L 复制符号链接指向的实际文件
+          cp -aL "${src}" "${dest}" || { echo "错误: 无法复制 '$1' 到 '$2'." >&2; exit 1; }
+          return 0
         }
         rsync_verbose() {
-            local src_dir="$1/" # 添加斜杠表示复制内容
-            local dest_dir="$2/"
-            echo "  同步目录 (rsync): ${src_dir} -> ${dest_dir}"
-            # -a 归档模式, -v 显示详情, --copy-links 复制链接目标
-            rsync -av --copy-links "${src_dir}" "${dest_dir}" || { echo "错误: 无法同步目录 '$1' 到 '$2'. 安装步骤可能失败。"; exit 1; }
+          local src_dir="$1/" # 添加斜杠表示复制内容
+          local dest_dir="$2/"
+           if [ ! -d "$1" ]; then
+            echo "警告: 源目录 '$1' 不存在, 跳过同步。" >&2
+            return 1
+          fi
+          echo "  同步目录 (rsync): ${src_dir} -> ${dest_dir}"
+          # -a 归档模式, -v 显示详情, --copy-links 复制链接目标, --no-owner --no-group 避免权限问题
+          rsync -a --copy-links --no-owner --no-group "${src_dir}" "${dest_dir}" || { echo "错误: 无法同步目录 '$1' 到 '$2'." >&2; exit 1; }
+          return 0
         }
 
-        # 复制主要可执行文件 (Binutils + GCC)
-        echo "  复制可执行文件到 system/bin..."
+        # 复制主要可执行文件 (Binutils + GCC), 重命名简化
+        echo "--- 复制可执行文件到 system/bin (重命名)..."
+        copied_bins=0
         for tool in gcc g++ cpp as ld ar ranlib strip nm objdump readelf size strings; do
             src_file="${INSTALL_PREFIX}/bin/${TARGET_TRIPLE}-${tool}"
             dest_file="${MODULE_DIR}/system/bin/${tool}" # 模块内简化名称
-            if [ -e "${src_file}" ]; then # 使用 -e 检查文件或符号链接是否存在
-                copy_verbose "${src_file}" "${dest_file}"
+            if copy_verbose "${src_file}" "${dest_file}"; then
                 chmod 755 "${dest_file}" # 确保可执行
-            else
-                echo "警告: 未找到 ${src_file}，跳过复制。"
+                copied_bins=$((copied_bins + 1))
             fi
         done
+        if [ "$copied_bins" -eq 0 ]; then
+            echo "错误: 未能复制任何 Binutils/GCC 可执行文件。" >&2; exit 1;
+        fi
 
-        # 复制 GCC 内部工具
-        echo "  复制 GCC libexec 文件..."
+        # 复制 GCC 内部工具 (libexec)
+        echo "--- 复制 GCC libexec 文件..."
         libexec_src="${INSTALL_PREFIX}/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
         libexec_dest="${MODULE_DIR}/system/libexec/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
-        if [ -d "${libexec_src}" ]; then
-          rsync_verbose "${libexec_src}" "${libexec_dest}"
+        if rsync_verbose "${libexec_src}" "${libexec_dest}"; then
           find "${libexec_dest}" -type f -exec chmod 644 {} \; # 默认 644
-          find "${libexec_dest}" -type f -executable -exec chmod 755 {} \; # 可执行文件设为 755
-        else
-          echo "警告: 未找到 GCC libexec 目录 ${libexec_src}."
+          find "${libexec_dest}" -type f -name 'cc1' -o -name 'cc1plus' -o -name 'collect2' -o -name 'lto1' -o -name 'lto-wrapper' -exec chmod 755 {} \; # 主要的可执行文件设为 755
         fi
 
-        # 复制 GCC 支持库 (如 libgcc.a, crtbegin_so.o)
-        echo "  复制 GCC lib 文件..."
+        # 复制 GCC 支持库 (如 libgcc.a, crtbegin_so.o) (lib/gcc)
+        echo "--- 复制 GCC lib 文件..."
         libgcc_src="${INSTALL_PREFIX}/lib/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
         libgcc_dest="${MODULE_DIR}/system/lib/gcc/${TARGET_TRIPLE}/${GCC_VERSION}"
-        if [ -d "${libgcc_src}" ]; then
-          rsync_verbose "${libgcc_src}" "${libgcc_dest}"
+        if rsync_verbose "${libgcc_src}" "${libgcc_dest}"; then
           find "${libgcc_dest}" -type f -exec chmod 644 {} \; # 库文件通常 644
-        else
-          echo "警告: 未找到 GCC lib 目录 ${libgcc_src}."
+          # crt*.o 文件通常需要可读
         fi
 
-        # 复制 C++ 头文件 (如果存在)
+        # 复制 C++ 头文件
+        echo "--- 复制 C++ 头文件..."
         cxx_include_src="${INSTALL_PREFIX}/include/c++/${GCC_VERSION}"
         cxx_include_dest="${MODULE_DIR}/system/include/c++/${GCC_VERSION}"
-        if [ -d "${cxx_include_src}" ]; then
-          echo "  复制 C++ 头文件..."
-          rsync_verbose "${cxx_include_src}" "${cxx_include_dest}"
+        if rsync_verbose "${cxx_include_src}" "${cxx_include_dest}"; then
           find "${cxx_include_dest}" -type f -exec chmod 644 {} \;
-        else
-          echo "警告: 未找到 C++ 头文件目录 ${cxx_include_src}."
         fi
 
-        # 复制依赖的共享库 (GMP, MPFR, MPC, libstdc++, libgcc_s)
-        echo "  复制运行时共享库到 system/${LIB_DIR_NAME}..."
+        # 复制依赖的运行时共享库 (GMP, MPFR, MPC, libstdc++, libgcc_s)
+        echo "--- 复制运行时共享库到 system/${LIB_DIR_NAME}..."
         shared_lib_src_dir="${INSTALL_PREFIX}/${LIB_DIR_NAME}"
         shared_lib_dest_dir="${MODULE_DIR}/system/${LIB_DIR_NAME}"
+        copied_libs=0
         if [ -d "${shared_lib_src_dir}" ]; then
-             find "${shared_lib_src_dir}" -maxdepth 1 \( -name 'libgmp.so*' -o -name 'libmpfr.so*' -o -name 'libmpc.so*' -o -name 'libstdc++.so*' -o -name 'libgcc_s.so*' \) -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
-             # 设置共享库权限为 755
+             # 查找并复制主要的 .so 文件及其可能的符号链接
+             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libgmp.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
+             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libmpfr.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
+             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libmpc.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
+             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libstdc++.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
+             find "${shared_lib_src_dir}" -maxdepth 1 -type f -name 'libgcc_s.so*' -print -exec cp -aL {} "${shared_lib_dest_dir}/" \;
+
+             # 设置共享库权限为 755 (可执行/可加载)
              find "${shared_lib_dest_dir}" -name '*.so*' -type f -exec chmod 755 {} \;
+             copied_libs=$(find "${shared_lib_dest_dir}" -name '*.so*' -type f | wc -l)
         else
             echo "警告: 未找到共享库源目录 ${shared_lib_src_dir}."
         fi
 
-        # 验证库是否已复制
-        if [ -z "$(ls -A ${shared_lib_dest_dir} 2>/dev/null)" ]; then # 增加 2>/dev/null 避免目录不存在时报错
-           echo "警告: 未能复制任何共享库到 ${shared_lib_dest_dir}。GCC 可能无法正常运行！"
+        # 验证关键库是否已复制
+        if ! ls "${shared_lib_dest_dir}/libstdc++."* > /dev/null 2>&1 || \
+           ! ls "${shared_lib_dest_dir}/libgcc_s."* > /dev/null 2>&1 || \
+           ! ls "${shared_lib_dest_dir}/libgmp."* > /dev/null 2>&1 || \
+           ! ls "${shared_lib_dest_dir}/libmpfr."* > /dev/null 2>&1 || \
+           ! ls "${shared_lib_dest_dir}/libmpc."* > /dev/null 2>&1 ; then
+           echo "警告: 未能复制所有必需的共享库到 ${shared_lib_dest_dir}。GCC 可能无法正常运行！" >&2
+           # Consider failing the build here if libs are essential: exit 1
         else
-           echo "共享库复制完成:"
+           echo ">>> 共享库复制完成 ($copied_libs files):"
            ls -l ${shared_lib_dest_dir}
         fi
 
+
         # 创建 module.prop 文件
-        echo "创建 module.prop..."
-        # 生成 versionCode，例如 12.2.0 -> 120200
-        safe_version_code=$(echo $GCC_VERSION | awk -F. '{ printf "%d%02d%02d\n", $1, $2, $3 }')
+        echo ">>> 创建 module.prop..."
         cat << EOF > ${MODULE_DIR}/module.prop
 id=${MODULE_ID}
 name=${MODULE_NAME}
 version=${MODULE_VERSION}
-versionCode=${safe_version_code}
+versionCode=${MODULE_VERSION_CODE}
 author=${MODULE_AUTHOR}
-description=为 Android ${TARGET_ARCH} 构建的 GCC ${GCC_VERSION} 工具链。安装到 /system。由 GitHub Actions CI 构建。
-arch=${TARGET_ARCH}
+description=${MODULE_DESCRIPTION}
 minMagisk=20400
-updateJson= # 留空或填写你的更新 JSON URL
+arch=${TARGET_ARCH}
+# Optional: Provide URL for update checks
+# updateJson=https://example.com/updates/${MODULE_ID}.json
 EOF
-        echo "module.prop 内容："
+        echo "--- module.prop 内容 ---"
         cat ${MODULE_DIR}/module.prop
+        echo "-------------------------"
 
         # 创建 META-INF 文件 (使用标准 Magisk stub)
-        echo "创建 META-INF 文件..."
-        cat << EOF > ${MODULE_DIR}/META-INF/com/google/android/update-binary
+        echo ">>> 创建 META-INF 文件..."
+        # update-binary script
+        cat << 'EOF' > ${MODULE_DIR}/META-INF/com/google/android/update-binary
 #!/sbin/sh
-# Magisk Module Installer Script Stub
-# Based on Magisk minimal template
+# Magisk Module Installer Script v1
+
+# Default permissions
+umask 022
+
+# Load utility functions (if needed, typically provided by Magisk/KernelSU environment)
+# . /data/adb/magisk/util_functions.sh
+
+# Environment variables provided by Magisk:
+# $MODPATH: Path to the module's installation directory
+# $TMPDIR: Temporary directory for extraction
+# $ZIPFILE: Path to the installation zip file
+# $ARCH: Architecture of the device (e.g., arm, arm64, x86, x86_64)
+# $IS64BIT: True if the architecture is 64-bit
+# $API: API level of the device
 
 ui_print() {
-  echo "\$1"
+  echo "$1"
 }
 
 abort() {
-  ui_print "\$1"
+  ui_print "! $1"
   exit 1
 }
 
-# 默认权限
-umask 022
-
-# Magisk 环境检查 (可选)
-# if [ \$MAGISK_VER_CODE -lt 20400 ]; then
-#   abort "! 需要 Magisk 版本 20.4 或更高。"
+# Check Magisk version (optional but recommended)
+# if [ $MAGISK_VER_CODE -lt 20400 ]; then
+#   abort "Magisk 20.4+ is required!"
 # fi
 
-ui_print "- 解压模块文件"
-unzip -o "\$ZIPFILE" 'system/*' -d \$MODPATH >&2
+# Check architecture (optional, module.prop usually handles this)
+# if [ "$ARCH" != "arm64" ]; then # Example for aarch64 only module
+#   abort "This module only supports arm64 architecture!"
+# fi
 
-# 移除不必要的文件 (可选)
-# rm -f \$MODPATH/module.prop
+ui_print "- Extracting module files"
+unzip -oq "$ZIPFILE" 'system/*' -d $MODPATH >&2
 
-ui_print "- 设置权限"
-# MODPATH 是 Magisk 提供的模块安装路径
-# 使用 Magisk 的 set_perm_recursive 设置权限
-# set_perm_recursive <目录> <用户> <组> <目录权限> <文件权限>
-set_perm_recursive \$MODPATH 0 0 0755 0644 # 基础权限
-set_perm_recursive \$MODPATH/system 0 0 0755 0644
-set_perm_recursive \$MODPATH/system/bin 0 0 0755 0755 # 可执行文件
-set_perm_recursive \$MODPATH/system/libexec 0 0 0755 0644 # libexec 默认 644
-find \$MODPATH/system/libexec -type f -executable -exec chmod 0755 {} \; # libexec 内可执行文件 755
-set_perm_recursive \$MODPATH/system/include 0 0 0755 0644 # 头文件
-set_perm_recursive \$MODPATH/system/lib 0 0 0755 0644   # 32位库目录
-set_perm_recursive \$MODPATH/system/lib64 0 0 0755 0644 # 64位库目录
+# Remove placeholder files if they exist (like .gitkeep)
+find $MODPATH/system -type f -name '.gitkeep' -delete
 
-# 确保 .so 文件有执行权限
-if [ -d "\$MODPATH/system/lib" ]; then
-  find \$MODPATH/system/lib -type f -name '*.so*' -exec chmod 0755 {} \;
+ui_print "- Setting permissions"
+# Magisk's set_perm_recursive: <path> <owner> <group> <dir_perm> <file_perm> [context]
+# Set base permissions for module files
+set_perm_recursive $MODPATH 0 0 0755 0644
+
+# Set specific permissions for system directory contents
+# Binaries need execute permission (0755)
+set_perm_recursive $MODPATH/system/bin 0 0 0755 0755
+# Shared libraries need read and execute (for loading) (0755)
+if [ -d "$MODPATH/system/lib" ]; then
+  set_perm_recursive $MODPATH/system/lib 0 0 0755 0755
 fi
-if [ -d "\$MODPATH/system/lib64" ]; then
-  find \$MODPATH/system/lib64 -type f -name '*.so*' -exec chmod 0755 {} \;
+if [ -d "$MODPATH/system/lib64" ]; then
+  set_perm_recursive $MODPATH/system/lib64 0 0 0755 0755
+fi
+# Libexec contains internal binaries, set execute for them
+if [ -d "$MODPATH/system/libexec" ]; then
+  set_perm_recursive $MODPATH/system/libexec 0 0 0755 0644 # Dirs 755, files 644 initially
+  # Find specific executables inside libexec and make them 755
+  find $MODPATH/system/libexec -type f \( -name 'cc1' -o -name 'cc1plus' -o -name 'collect2' -o -name 'lto1' -o -name 'lto-wrapper' \) -exec chmod 0755 {} \;
+fi
+# Include files just need read (0644 is sufficient from base)
+if [ -d "$MODPATH/system/include" ]; then
+  set_perm_recursive $MODPATH/system/include 0 0 0755 0644
+fi
+# GCC internal libraries (lib/gcc) usually need read (0644)
+if [ -d "$MODPATH/system/lib/gcc" ]; then
+  set_perm_recursive $MODPATH/system/lib/gcc 0 0 0755 0644
 fi
 
-ui_print "- 安装完成"
+
+# Clean up empty directories if any extraction issues occurred (optional)
+find $MODPATH/system -type d -empty -delete
+
+ui_print "- Installation complete"
 exit 0
 EOF
         chmod 755 ${MODULE_DIR}/META-INF/com/google/android/update-binary
-        # updater-script 通常为空
+
+        # updater-script (usually empty for simple modules)
         touch ${MODULE_DIR}/META-INF/com/google/android/updater-script
 
-        echo "模块结构创建完成。"
+        echo ">>> 模块结构创建完成。"
         echo "模块内容概览 (顶层):"
         ls -l ${MODULE_DIR}
         echo "模块 /system/bin 内容:"
@@ -654,11 +696,35 @@ EOF
         echo "模块 /system/${LIB_DIR_NAME} 内容:"
         ls -l ${MODULE_DIR}/system/${LIB_DIR_NAME}
 
+    # 9. 打包模块为 Zip 文件
+    - name: 打包模块为 Zip 文件
+      run: |
+        #!/bin/bash
+        set -e # 确保脚本在出错时退出
 
-        - name: 上传构建产物
+        echo ">>> 开始打包 Zip 文件..."
+        cd ${MODULE_DIR} || { echo "错误: 无法进入模块目录 ${MODULE_DIR}" >&2; exit 1; }
+
+        # 规范化文件名
+        ZIP_FILENAME="GCC-${GCC_VERSION}-android-${TARGET_ARCH}-Magisk-$(date +%Y%m%d).zip"
+        echo "输出文件名: ${ZIP_FILENAME}"
+
+        # 创建 zip 文件, -r 递归, -9 最大压缩, '.' 当前目录
+        # -x 排除不必要的文件/目录
+        zip -r9 "${GITHUB_WORKSPACE}/${ZIP_FILENAME}" . -x ".git/*" -x ".github/*" -x ".*" -x "__MACOSX"
+
+        cd ${GITHUB_WORKSPACE}
+        echo ">>> Zip 文件打包完成: ${ZIP_FILENAME}"
+        ls -lh ${ZIP_FILENAME} # 显示文件大小
+
+        # 将 zip 文件名保存到环境变量，以便上传步骤使用
+        echo "MODULE_ZIP_NAME=${ZIP_FILENAME}" >> $GITHUB_ENV
+
+    # 10. 上传构建产物 (Zip 文件)
+    - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: gcc-magisk-module-${{ env.TARGET_ARCH }}-${{ env.GCC_VERSION }}
-        path: ${{ github.workspace }}/${{ env.MODULE_ZIP_NAME }}
-        if-no-files-found: error # 确保这一行和上面 path: 那行的起始列对齐
-        retention-days: 7        # 确保这一行和上面几行的起始列对齐
+        name: gcc-magisk-module-${{ env.TARGET_ARCH }}-${{ env.GCC_VERSION }} # Artifact 名称包含架构和版本
+        path: ${{ github.workspace }}/${{ env.MODULE_ZIP_NAME }} # 使用变量指定要上传的文件
+        if-no-files-found: error # 如果 zip 文件没找到则报错
+        retention-days: 7 # 可选：设置产物保留天数
