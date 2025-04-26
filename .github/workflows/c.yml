@@ -3,9 +3,9 @@ name: 构建 ANGLE - Android ARM64 (使用本地 args.gn 模板)
 
 # 触发条件
 #on:
-  push:
+#  push:
     branches: [ "main" ] # 推送到 main 分支时触发
-  pull_request:
+ # pull_request:
     branches: [ "main" ] # 向 main 分支发起 Pull Request 时触发
   workflow_dispatch: # 允许在 GitHub Actions UI 上手动触发
 
