@@ -2,7 +2,7 @@
 name: 构建 ANGLE - Android ARM64 (使用本地 args.gn 模板)
 
 # 触发条件
-on:
+#on:
   push:
     branches: [ "main" ] # 推送到 main 分支时触发
   pull_request:
