@@ -129,30 +129,39 @@ jobs:
         tar -xf mpc-${MPC_VERSION}.tar.gz
         echo ">>> Extraction complete."
 
-    # 6. Build Dependencies (Binutils, GMP, MPFR, MPC) - Cross-Compiled
+        # 6. Build Dependencies (Binutils, GMP, MPFR, MPC) - Cross-Compiled
     - name: 构建依赖项 (Binutils, GMP, MPFR, MPC)
       run: |
         #!/bin/bash
         set -e
         echo ">>> Starting build of dependencies (cross-compiling)..."
-        # PATH and LD_LIBRARY_PATH are inherited from GITHUB_ENV set in step 4
+        # PATH 和 LD_LIBRARY_PATH 从第 4 步的 GITHUB_ENV 继承
         echo "Build PATH: $PATH"
         echo "Build LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
         NPROC=$(nproc)
         echo "Using $NPROC parallel jobs for make."
+
+        # --- 确定构建机器类型 ---
         BUILD_MACHINE=$(./gcc-${GCC_VERSION}/config.guess)
-        export BUILD_MACHINE
+        if [ -z "$BUILD_MACHINE" ]; then
+            echo "ERROR: config.guess failed to determine build machine triplet." >&2
+            exit 1
+        fi
+        # --- 修正：导出 BUILD_MACHINE 到当前脚本和 GITHUB_ENV ---
+        export BUILD_MACHINE # 导出供当前脚本使用
+        echo "BUILD_MACHINE=${BUILD_MACHINE}" >> $GITHUB_ENV # 写入 GITHUB_ENV 供后续步骤使用
+        # --- 修正结束 ---
         echo "Detected Build Machine (Build): $BUILD_MACHINE"
         echo "Target Machine (Host/Target): $TARGET_TRIPLE"
 
-        # --- Native Tools for Binutils Build ---
+        # --- 用于 Binutils 构建的原生工具 ---
         NATIVE_CC=$(command -v gcc)
         NATIVE_CXX=$(command -v g++)
         NATIVE_AR=$(command -v ar)
         NATIVE_RANLIB=$(command -v ranlib)
         echo "Using Native CC for Binutils: ${NATIVE_CC}"
 
-        # --- Cross Tools for GMP, MPFR, MPC Build ---
+        # --- 用于 GMP, MPFR, MPC 构建的交叉工具 ---
         CROSS_CC="${TOOLCHAIN_TARGET}-clang"
         CROSS_CXX="${TOOLCHAIN_TARGET}-clang++"
         CROSS_AR="${NDK_TOOLCHAIN_PATH}/llvm-ar"
@@ -161,23 +170,23 @@ jobs:
         CROSS_NM="${NDK_TOOLCHAIN_PATH}/llvm-nm"
         echo "Using Cross CC for Libraries: ${CROSS_CC}"
 
-        # --- Build Binutils ---
+        # --- 构建 Binutils ---
         echo ">>> Building Binutils ${BINUTILS_VERSION} (using native compiler)..."
         cd binutils-${BINUTILS_VERSION}
-        # Configure using NATIVE compiler because --host is the build machine
-        # Added --disable-libctf to avoid linking errors
+        # 使用原生编译器配置，因为 --host 是构建机
+        # 添加了 --disable-libctf 来避免链接错误
         ./configure --target=${TARGET_TRIPLE} --host=${BUILD_MACHINE} --build=${BUILD_MACHINE} \
                     --prefix=${INSTALL_PREFIX} --with-sysroot=${NDK_SYSROOT} \
                     --disable-nls --disable-werror --disable-gprofng \
                     --disable-libctf \
                     --enable-shared --disable-static \
-                    CC="${NATIVE_CC}" CXX="${NATIVE_CXX}" AR="${NATIVE_AR}" RANLIB="${NATIVE_RANLIB}" # Use NATIVE tools
+                    CC="${NATIVE_CC}" CXX="${NATIVE_CXX}" AR="${NATIVE_AR}" RANLIB="${NATIVE_RANLIB}" # 使用原生工具
         make -j${NPROC} && make install || { echo "ERROR: Binutils build failed" >&2; exit 1; }
         cd ..
         echo ">>> Binutils build complete."
 
-        # --- IMPORTANT: Update PATH again for this script AND subsequent steps ---
-        # Now the actual Binutils tools are installed in ${INSTALL_PREFIX}/bin
+        # --- 重要：再次更新 PATH 给当前脚本和后续步骤 ---
+        # 现在实际的 Binutils 工具已安装在 ${INSTALL_PREFIX}/bin
         export PATH="${INSTALL_PREFIX}/bin:${PATH}"
         echo "PATH=${PATH}" >> $GITHUB_ENV
         echo ">>> Updated PATH to prioritize newly built Binutils: ${PATH}"
@@ -186,45 +195,44 @@ jobs:
         fi
         echo ">>> New Binutils assembler found: $(command -v ${TARGET_TRIPLE}-as)"
 
-        # --- Build GMP ---
+        # --- 构建 GMP ---
         echo ">>> Building GMP ${GMP_VERSION} (using cross compiler)..."
         cd gmp-${GMP_VERSION}
-        # Configure using CROSS compiler because --host is the target machine
+        # 使用交叉编译器配置，因为 --host 是目标机
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
                     --enable-cxx --enable-shared --disable-static \
-                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # Use CROSS tools
+                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # 使用交叉工具
         make -j${NPROC} && make install || { echo "ERROR: GMP build failed" >&2; exit 1; }
         cd ..
         echo ">>> GMP build complete."
 
-        # --- Build MPFR ---
+        # --- 构建 MPFR ---
         echo ">>> Building MPFR ${MPFR_VERSION} (using cross compiler)..."
         cd mpfr-${MPFR_VERSION}
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
                     --with-gmp=${INSTALL_PREFIX} --enable-shared --disable-static \
-                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # Use CROSS tools
+                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # 使用交叉工具
         make -j${NPROC} && make install || { echo "ERROR: MPFR build failed" >&2; exit 1; }
         cd ..
         echo ">>> MPFR build complete."
 
-        # --- Build MPC ---
+        # --- 构建 MPC ---
         echo ">>> Building MPC ${MPC_VERSION} (using cross compiler)..."
         cd mpc-${MPC_VERSION}
         ./configure --prefix=${INSTALL_PREFIX} --host=${TARGET_TRIPLE} --build=${BUILD_MACHINE} \
                     --with-gmp=${INSTALL_PREFIX} --with-mpfr=${INSTALL_PREFIX} \
                     --enable-shared --disable-static \
-                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # Use CROSS tools
+                    CC="${CROSS_CC}" CXX="${CROSS_CXX}" AR="${CROSS_AR}" RANLIB="${CROSS_RANLIB}" NM="${CROSS_NM}" STRIP="${CROSS_STRIP}" # 使用交叉工具
         make -j${NPROC} && make install || { echo "ERROR: MPC build failed" >&2; exit 1; }
         cd ..
         echo ">>> MPC build complete."
 
-        # --- Update LD_LIBRARY_PATH again for this script AND subsequent steps ---
-        # Now the actual libraries are installed in ${INSTALL_PREFIX}/${LIB_DIR_NAME}
+        # --- 再次更新 LD_LIBRARY_PATH 给当前脚本和后续步骤 ---
+        # 现在实际的库已安装在 ${INSTALL_PREFIX}/${LIB_DIR_NAME}
         export LD_LIBRARY_PATH="${INSTALL_PREFIX}/${LIB_DIR_NAME}:${LD_LIBRARY_PATH}"
         echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}" >> $GITHUB_ENV
         echo ">>> Updated LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"
-        echo ">>> Dependencies build step finished successfully."
-
+        echo ">>> Dependencies build step finished successfully."# 
     # 7. Build GCC (Cross-Compiled)
     - name: 构建 GCC
       run: |
